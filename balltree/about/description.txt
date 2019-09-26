@@ -1,0 +1,1 @@
+A very fast python-wrapped fortran implementation of a `ball tree`, includes fast `argsort` and `argselect` codes for flat arrays as well.
