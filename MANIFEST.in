@@ -1,0 +1,9 @@
+recursive-include development *
+recursive-include resources *
+include MANIFEST.in
+recursive-include balltree *
+include readme.md
+include setup.py
+include package_name.txt
+include setup.cfg
+include LICENSE.txt
