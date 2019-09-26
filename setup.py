@@ -30,23 +30,16 @@ if __name__ == "__main__":
     package = package_name
     version =read("version.txt")[0]
     description = read("description.txt")[0]
-    requirements = read("requirements.txt")
     keywords = read("keywords.txt")
     classifiers = read("classifiers.txt")
     name, email, git_username = read("author.txt")
-
-    # Translate the git requirements to proper requirements.
-    dependency_links = [r for r in requirements if "github.com" in r]
-    for r in dependency_links:
-        try:    pkg_name = r.split("egg=")[1]
-        except: raise(DependencyError("GitHub repositories must specify '#egg=<package-name>' at the end."))
-        requirements[requirements.index(r)] = pkg_name + " @ git+https://" + r.split("://")[1]
+    requirements = read("requirements.txt")
     # Call "setup" to formally set up this module.
     setup(
         author = name,
         author_email = email,
         name=package,
-        packages=find_packages(exclude=[]),
+        packages=[package],
         include_package_data=True,
         install_requires=requirements,
         version=version,
@@ -55,6 +48,7 @@ if __name__ == "__main__":
         download_url = 'https://github.com/{git_username}/{package}/archive/{version}.tar.gz'.format(
             git_username=git_username, package=package, version=version),
         description = description,
+        scripts=[package+"/setup.py"],
         keywords = keywords,
         python_requires = '>=3.6',
         license='MIT',
@@ -67,4 +61,7 @@ if __name__ == "__main__":
 # 
 #   pip install https://github.com/tchlux/packager/archive/1.0.0.zip
 # 
+# Include external requirements in a `requirements.txt` file like:
+#  
+#   packager @ https://github.com/tchlux/packager/archive/1.0.0.zip @ 1.0.0
 # 
