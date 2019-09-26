@@ -7,6 +7,8 @@ print()
 print("RUNNING SETUP SCRIPT NOW!")
 print()
 
+import os
+
 PATH_TO_HERE   = os.path.dirname(os.path.abspath(__file__))
 # Import the Fortran utilities.
 PATH_TO_BT     = os.path.join(PATH_TO_HERE, "ball_tree.f90")
