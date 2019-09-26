@@ -19,8 +19,8 @@ import numpy as np
 import balltree
 
 points = np.random.random(size=(100000,1000))
-tree = balltree.BallTree(points, [leaf_size=<leaf size int>])
-distances, indices = tree.query(points[:1,:], [k=<k nearest int>])
+tree = balltree.BallTree(points, leaf_size=1)
+distances, indices = tree.query(points[:1,:], k=3)
 # 'distances' will have the distances to the `k` nearest points to points[0]
 # 'indices' will have the index of the `k` nearest points to points[0]
 
