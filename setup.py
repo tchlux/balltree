@@ -54,7 +54,9 @@ if __name__ == "__main__":
         license='MIT',
         classifiers=classifiers
     )
-
+    # Import the setup file.
+    import importlib
+    importlib.import_module(package+".setup")
 
 # 
 # Install specific versions of a package with something like:
