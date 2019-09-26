@@ -26,7 +26,7 @@ distances, indices = tree.query(points[:1,:], k=3)
 
 
 x = np.random.random(size=(10000,))
-x, i = balltree.argsort(x, i=np.arange(len(x)))
+x, i = balltree.argsort(x, indices=np.arange(len(x)))
 # `x` is sorted in place
 # `i` is sorted symmetrically with `x` in place, in this case it
 #     shows the original indices of the elements of `x` (before sort).
@@ -34,7 +34,7 @@ x, i = balltree.argsort(x, i=np.arange(len(x)))
 
 x = np.random.random(size=(10000,))
 k = 0
-x, i = balltree.argselect(x, k, i=np.arange(len(x)))
+x, i = balltree.argselect(x, k, indices=np.arange(len(x)))
 # `x` is rearranged such that the element at `x[k]` has rank `k`
 # `i` is rearranged symmetrically with `x` in place, in this case it
 #     shows the original indices of the elements of `x` (before sort).
