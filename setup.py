@@ -48,15 +48,22 @@ if __name__ == "__main__":
         download_url = 'https://github.com/{git_username}/{package}/archive/{version}.tar.gz'.format(
             git_username=git_username, package=package, version=version),
         description = description,
-        scripts=[os.path.join(package,"setup.py")],
+        # scripts=[os.path.join(package,"setup.py")],
         keywords = keywords,
         python_requires = '>=3.6',
         license='MIT',
         classifiers=classifiers
     )
-    # Import the setup file.
-    import importlib
-    importlib.import_module(package+".setup")
+    # Attempt to import the module, in case compilation must be
+    # done. It is in a try block with an empty catch-all except. THIS
+    # IS BAD PRACTICE, but it is possible that the issues are more
+    # easily fixed after install. Consider modifying this block for
+    # each project to be less all-encompassing.
+    try:
+        # Import the setup file.
+        import importlib
+        importlib.import_module(package+".setup")
+    except: pass
 
 # 
 # Install specific versions of a package with something like:
