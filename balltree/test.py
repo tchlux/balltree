@@ -1,9 +1,10 @@
 import numpy as np
 
-TEST_SORT    = True
+TEST_SORT    = False
 TREE_TEST    = False
-LARGE_TEST   = True
-INTEGER_TEST = True
+TEST_PRUNE   = True
+LARGE_TEST   = False
+INTEGER_TEST = False
 COMPARE_AGAINST_SKLEARN = False
 
 
@@ -49,6 +50,60 @@ if TEST_SORT:
     ids = pts.argsort()
     t.stop()
     print("numpy:  ", t())
+
+
+if TEST_PRUNE:
+    from balltree import ball_tree, BallTree
+    # Function for verifying correctness.
+    def small_diff(v1,v2): return abs(v1 - v2) < .01
+    # Build a tree over random points in 1 dimension.
+    np.random.seed(3)
+    pts = np.random.random(size=(100000,1))
+    tree = BallTree()
+    tree.add(pts)
+    tree.build()
+
+    vals = sorted((tree[0], tree[2], tree[1],
+                  tree[(tree.tree.shape[1] + 2) // 2 + 1],
+                  tree[(tree.tree.shape[1] + 2) // 2]
+    ))
+    print()
+    for v in vals: print(v)
+    print()
+    assert(all(small_diff(v1,v2) for (v1,v2) in zip(
+        vals, np.linspace(0,1,5))))
+
+    tree.prune(4, method="inner")
+    print(tree)
+    print(tree[:len(tree)][0,:])
+    print(sorted(tree[:len(tree)][0,:]))
+    print()
+    assert(all(small_diff(v1,v2) for (v1,v2) in zip(
+        sorted(tree[:len(tree)][0,:]), np.linspace(0,1,len(tree)))))
+
+    tree.prune(3, method="inner")
+    print(tree)
+    print(tree[:len(tree)][0,:])
+    print(sorted(tree[:len(tree)][0,:]))
+    print()
+    assert(all(small_diff(v1,v2) for (v1,v2) in zip(
+        sorted(tree[:len(tree)][0,:]), np.linspace(0,1,len(tree)))))
+
+    tree.prune(2, method="inner")
+    print(tree)
+    print(tree[:len(tree)][0,:])
+    print(sorted(tree[:len(tree)][0,:]))
+    print()
+    assert(all(small_diff(v1,v2) for (v1,v2) in zip(
+        sorted(tree[:len(tree)][0,:]), np.linspace(0,1,len(tree)))))
+
+    tree.prune(1, method="inner")
+    print(tree)
+    print(tree[:len(tree)][0,:])
+    print(sorted(tree[:len(tree)][0,:]))
+    print()
+    assert(small_diff(tree[0][0], .5))
+
 
 
 if TREE_TEST:

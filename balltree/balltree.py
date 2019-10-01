@@ -100,31 +100,104 @@ def argselect(values, k, indices=None, divisor=None, max_size=None):
 # Class for constructing a ball tree.
 class BallTree:
     # Given points and a leaf size, construct a ball tree.
-    def __init__(self, points, leaf_size=1, transpose=True):
-        if transpose:
-            points = points.T
-        # Handle different use cases.
-        if ('int8' in points.dtype.name):
-            self.leaf_size = leaf_size
-            self.tree    = np.asarray(points, order='F', dtype='int8')
-            self.sq_sums = np.zeros(self.tree.shape[1],  dtype='int64')
-            self.order   = np.arange(self.tree.shape[1], dtype='int64') + 1
-            self.build_tree = ball_tree.build_tree_i8
-            self.fix_order  = ball_tree.fix_order_i8
-            self.bt_nearest = ball_tree.nearest_i8
-            self.dtype = np.int8
-            self.itype = np.int64
+    def __init__(self, points=None, dtype=None, transpose=True,
+                 leaf_size=1, reorder=True):
+        self.leaf_size = leaf_size
+        # Assign the data type if it was provided.
+        if (dtype is not None):
+            self.ttype = dtype
+            self._set_type_internals()
+        else: self.ttype = None
+        # Assign the points and build the tree, if provided.
+        if (points is not None):
+            self.add(points, transpose=transpose)
+            self.build(reorder=reorder)
+
+    # Given the data type of this class, setup which internal methods
+    # are called (for the appropriate number sizes).
+    def _set_type_internals(self):
+        # Declare the methods based on the dtype.
+        self._inner = ball_tree.inner
+        self._outer = ball_tree.outer
+        self._top = ball_tree.top
+        if ('int8' in str(self.ttype)):
+            self.sstype = np.int64
+            self._build_tree = ball_tree.build_tree_i8
+            self._fix_order  = ball_tree.fix_order_i8
+            self._bt_nearest = ball_tree.nearest_i8
+        elif ('float64' in str(self.ttype)):
+            self.sstype = np.float64
+            self._build_tree = ball_tree.build_tree_r64
+            self._fix_order  = ball_tree.fix_order_r64
+            self._bt_nearest = ball_tree.nearest_r64
         else:
-            self.leaf_size = leaf_size
-            self.tree    = np.asarray(points, order='F', dtype='float64')
-            self.sq_sums = np.zeros(self.tree.shape[1],  dtype='float64')
+            class UnsupportedType(Exception): pass
+            raise(UnsupportedType(f"The type '{dtype.name}' is not supported."))
+
+    # Based on the size and 'built' amount and the 'size' internal: if
+    # searching, return 'built' portion of tree; if building return
+    # the 'size' portion of tree.
+    def _get_order(self, search=False):
+        # For a search, only use the built portion of the tree.
+        if search:
+            if (self.built == self.tree.shape[1]): return self.order
+            else: return self.order[:self.built]
+        # For a build, only use the 'size' kept points in the tree.
+        else:
+            if (self.size == self.tree.shape[1]): return self.order
+            else: return self.order[:self.size]
+
+    # Add points to this ball tree, if the type is not yet defined, then
+    def add(self, points, transpose=True):
+        # Assign the data type if it is not set.
+        if (self.ttype is None):
+            if ('int8' in points.dtype.name): self.ttype = np.int8
+            else:                             self.ttype = np.float64
+            self._set_type_internals()
+        elif (points.dtype != self.ttype):
+            class WrongType(Exception): pass
+            raise(WrongType(f"The points provided were type '{points.dtype.name}', expected '{self.ttype.name}'."))
+        # Transpose the points if the are not already column-vectors.
+        if transpose: points = points.T
+        # If there are existing points, make sure the new ones match.
+        if hasattr(self, "size"):
+            # If possible, pack the points into available space.
+            if (points.shape[1] <= self.tree.shape[1] - self.size):
+                self.tree[:,self.size:self.size+point.shape[1]] = points
+                self.size += points.shape[1]
+            else:
+                old_tree = self.tree
+                old_points = self.tree[:,:self.size]
+                dim = self.tree.shape[1]
+                self.size += points.shape[1]
+                self.tree = np.zeros((dim, self.size), dtype=self.ttype)
+                # Assign the relevant internals for this tree.
+                self.sq_sums = np.zeros(self.tree.shape[1],  dtype=self.sstype)
+                self.order   = np.arange(self.tree.shape[1], dtype='int64') + 1
+                self.radii   = np.zeros(self.tree.shape[1],  dtype='float64')
+                # Pack the old points and the new points into a single tree.
+                self.tree[:,:old_points.shape[1]] = old_points
+                self.tree[:,old_points.shape[1]:] = points
+                # Delete the old tree.
+                del old_tree
+                return
+        else:
+            # Save the points internally as the tree.
+            self.tree    = np.asarray(points, order='F', dtype=self.ttype)
+            # Assign the relevant internals for this tree.
+            self.sq_sums = np.zeros(self.tree.shape[1],  dtype=self.sstype)
             self.order   = np.arange(self.tree.shape[1], dtype='int64') + 1
-            self.build_tree = ball_tree.build_tree_r64
-            self.fix_order  = ball_tree.fix_order_r64
-            self.bt_nearest = ball_tree.nearest_r64
-            self.dtype = np.float64
-            self.itype = np.int64
-        self.radii   = np.zeros(self.tree.shape[1],  dtype='float64')
+            self.radii   = np.zeros(self.tree.shape[1],  dtype='float64')
+            # Store BallTree internals for knowing how to evaluate.
+            self.built = 0
+            self.size = self.tree.shape[1]
+
+    # Build a tree out.
+    def build(self, leaf_size=None, reorder=True, has_sq_sums=False, root=None):
+        # Get the leaf size if it was not given.
+        if (leaf_size is None): leaf_size = self.leaf_size
+        # Translate the root from python index to fortran index if provided.
+        if (root is not None): root += 1
         # Build tree (in-place operation).
         #    .tree     will not be modified
         #    .sq_sums  will contain the squared sums of each point
@@ -132,32 +205,44 @@ class BallTree:
         #              node, or 0.0 if this point is a leaf.
         #    .order    will be the list of indices (1-indexed) that
         #              determine the structure of the ball tree.
-        self.build_tree(self.tree, self.sq_sums, self.radii,
-                        self.order, leaf_size=self.leaf_size)
-        self.index_mapping = self.order.copy()-1
+        order = self._get_order(search=False)
+        self._build_tree(self.tree, self.sq_sums, self.radii, order,
+                         leaf_size=leaf_size, computed_sq_sums=has_sq_sums, 
+                         root=root)
+        self.built = len(order)
+        # Store the index mapping from the build.
+        if hasattr(self, "index_mapping"): del self.index_mapping
+        self.index_mapping = order.copy() - 1
         # Restructure the ball tree so the points are in locally
         # contiguous blocks of memory (local by branch + leaf).
-        self.fix_order(self.tree, self.sq_sums, self.radii, self.order)
+        if reorder: self._fix_order(self.tree, self.sq_sums, self.radii, order)
+
+    # Restructure the ball tree so the points are in locally
+    # contiguous blocks of memory (local by branch + leaf).
+    def reorder(self):
+        order = self._get_order(search=True)
+        self._fix_order(self.tree, self.sq_sums, self.radii, order)
 
     # Find the "k" nearest neighbors to all points in z. Uses the same
-    # interface as the "BallTree.query" function, see help for more info.
-    def nearest(self, *args, **kwargs): return self.query(*args, **kwargs)
+    # interface as the "BallTree.nearest" function, see help for more info.
+    def query(self, *args, **kwargs): return self.nearest(*args, **kwargs)
 
     # Find the "k" nearest neighbors to all points in z.
-    def query(self, z, k=1, leaf_size=None, return_distance=True, transpose=True):
-        if (len(z.shape) != 2) or (z.shape[1] != self.tree.shape[0]):
-            class WrongDimension(Exception): pass
-            raise(WrongDimension(f"The provided query points must be in a row-vector matrix with dimension (..,{self.tree.shape[0]})."))
+    def nearest(self, z, k=1, leaf_size=None, return_distance=True, transpose=True):
+        # Get the leaf size.
         if (leaf_size is None): leaf_size = self.leaf_size
+        # Transpose the points if appropriate.
         if transpose: z = z.T
-        k = min(k, self.tree.shape[1])
+        # Make sure the 'k' value isn't bigger than the tree size.
+        k = min(k, self.built)
         # Initialize holders for output.
-        points  = np.asarray(z, order='F', dtype=self.dtype)
-        indices = np.ones((k, points.shape[1]), order='F', dtype=self.itype)
+        points  = np.asarray(z, order='F', dtype=self.ttype)
+        indices = np.ones((k, points.shape[1]), order='F', dtype='int64')
         dists   = np.ones((k, points.shape[1]), order='F', dtype='float64')
+        order = self._get_order(search=True)
         # Compute the nearest neighbors.
-        self.bt_nearest(points, k, self.tree, self.sq_sums, self.radii,
-                        self.order, leaf_size, indices, dists)
+        self._bt_nearest(points, k, self.tree, self.sq_sums, self.radii,
+                         order, leaf_size, indices, dists)
         # Return the results.
         if return_distance:
             if transpose: return dists.T, indices.T - 1
@@ -165,3 +250,62 @@ class BallTree:
         else:
             if transpose: return indices.T - 1
             else:         return indices - 1
+
+    # Summarize this tree.
+    def __str__(self):
+        if not hasattr(self,"tree"): return "empty BallTree"
+        return f"BallTree {self.tree.shape[::-1]}[:{self.size}] -- {self.built} built"
+
+    # Return the usable length of this tree.
+    def __len__(self):
+        if not hasattr(self,"built"): return 0
+        else:                         return self.built
+
+    # Get an index point from the tree.
+    def __getitem__(self, index):
+        return self.tree[:,self.order[:self.built][index]-1]
+
+    # Prune this tree and compact its points into the front of the
+    # array, adjust '.size' and '.built' accordingly.
+    def prune(self, levels=1, full=True, build=True, method="root"):
+        assert(levels >= 1)
+        assert(len(self) > 0)
+        # Build the tree out if it is not fully built.
+        if (full and (not (self.built == self.size))): self.build()
+        # Get the size of the built portion of the tree.
+        size = self.built
+        # Compute the indices of the inner children (50th percentile) points.
+        if (levels == 1):
+            # Use the middle child for 1 level.
+            indices = np.array([1], dtype=np.int64)
+        else:
+            # Handle the different methods of pruning the tree.
+            if method in {"inner", "outer"}:
+                to_keep = min(size, 1 + 2**(levels-1))
+                # Otherwise, get the root, first outer, and all inners.
+                indices = np.zeros(to_keep, dtype=np.int64)
+                # Get the indices of the inner children of the built tree.
+                if method == "inner":
+                    indices[0] = 1
+                    indices[1] = min((size + 2) // 2, size-1) + 1
+                    self._inner(size, levels, indices[2:])
+                elif method == "outer":
+                    indices[0] = 1
+                    indices[1] = 2
+                    self._outer(size, levels, indices[2:])
+            else:
+                to_keep = min(size, 2**levels - 1)
+                # Simply grab the root of the tree.
+                indices = np.zeros(to_keep, dtype=np.int64)                
+                self._top(size, levels, indices)
+            indices[:] -= 1
+        # Stop this operation if the tree will remain unchanged.
+        if (len(indices) == size): return
+        # Adjust the recorded size and amount built of this tree.
+        self.size = len(indices)
+        self.built = 1
+        # Keep those indices only.
+        self.order[:self.size] = self.order[indices]
+        # Rebuild the tree if desired.
+        if build: self.build(has_sq_sums=True, root=0)
+
