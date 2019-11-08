@@ -9,10 +9,21 @@ import os
 import fmodpy
 import numpy as np
 PATH_TO_HERE   = os.path.dirname(os.path.abspath(__file__))
+
+# Allow OpenMP to create nested threads.
+from multiprocessing import cpu_count
+# Set OpenMP variables to allow for greatest parallelism when building tree.
+if "OMP_NUM_THREADS" not in os.environ:
+    os.environ["OMP_NUM_THREADS"] = str(cpu_count())
+if "OMP_MAX_ACTIVE_LEVELS" not in os.environ:
+    os.environ["OMP_MAX_ACTIVE_LEVELS"] = str(int(np.ceil(np.log2(cpu_count()))))
+if "OMP_NESTED" not in os.environ:
+    os.environ["OMP_NESTED"] = "TRUE"
+
 # Import the Fortran utilities.
 PATH_TO_BT     = os.path.join(PATH_TO_HERE, "ball_tree.f90")
 ball_tree = fmodpy.fimport(PATH_TO_BT, output_directory=PATH_TO_HERE,
-                           autocompile_extra_files=True)
+                           autocompile_extra_files=True, omp=True)
 PATH_TO_SORT   = os.path.join(PATH_TO_HERE, "fast_sort.f90")
 fast_sort = fmodpy.fimport(PATH_TO_SORT, output_directory=PATH_TO_HERE,
                            autocompile_extra_files=True)
@@ -101,7 +112,7 @@ def argselect(values, k, indices=None, divisor=None, max_size=None):
 class BallTree:
     # Given points and a leaf size, construct a ball tree.
     def __init__(self, points=None, dtype=None, transpose=True,
-                 leaf_size=1, reorder=True):
+                 leaf_size=1, reorder=True, root=None):
         self.leaf_size = leaf_size
         # Assign the data type if it was provided.
         if (dtype is not None):
@@ -111,7 +122,7 @@ class BallTree:
         # Assign the points and build the tree, if provided.
         if (points is not None):
             self.add(points, transpose=transpose)
-            self.build(reorder=reorder)
+            self.build(reorder=reorder, root=root)
 
     # Given the data type of this class, setup which internal methods
     # are called (for the appropriate number sizes).
@@ -147,7 +158,8 @@ class BallTree:
             if (self.size == self.tree.shape[1]): return self.order
             else: return self.order[:self.size]
 
-    # Add points to this ball tree, if the type is not yet defined, then
+    # Add points to this ball tree, if the type is not yet defined,
+    # then initialize the type of this tree to be same as added points.
     def add(self, points, transpose=True):
         # Assign the data type if it is not set.
         if (self.ttype is None):
@@ -231,6 +243,8 @@ class BallTree:
     def nearest(self, z, k=1, leaf_size=None, return_distance=True, transpose=True):
         # Get the leaf size.
         if (leaf_size is None): leaf_size = self.leaf_size
+        # If only a single point was given, convert it to a matrix.
+        if (len(z.shape) == 1): z = np.array([z])
         # Transpose the points if appropriate.
         if transpose: z = z.T
         # Make sure the 'k' value isn't bigger than the tree size.

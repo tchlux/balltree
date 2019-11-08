@@ -1,11 +1,11 @@
 import numpy as np
 
 TEST_SORT    = False
-TREE_TEST    = False
-TEST_PRUNE   = True
-LARGE_TEST   = False
+TEST_TREE    = False
+TEST_PRUNE   = False
+LARGE_TEST   = True
 INTEGER_TEST = False
-COMPARE_AGAINST_SKLEARN = False
+COMPARE_AGAINST_SKLEARN = True
 
 
 if TEST_SORT:
@@ -106,10 +106,11 @@ if TEST_PRUNE:
 
 
 
-if TREE_TEST:
+if TEST_TREE:
     from balltree import BallTree
     np.random.seed(0)
 
+    # if LARGE_TEST: size = (20000000,10)
     if LARGE_TEST: size = (100000,1000)
     else:          size = (4,2)
     print()

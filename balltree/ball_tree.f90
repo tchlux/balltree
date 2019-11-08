@@ -89,16 +89,22 @@ CONTAINS
     CALL SWAPI64(ORDER(I), ORDER(MID+1))
     ! Move the median point (furthest "interior") to the front (inner root).
     CALL SWAPI64(ORDER(2), ORDER(MID))
+    !$omp parallel num_threads(2)
+    !$omp sections
+    !$omp section
     ! Recurisively create this tree.
     !   build a tree with the root being the furthest from this center
     !   for the remaining "interior" points of this center node.
     CALL BUILD_TREE_R64(POINTS, SQ_SUMS, RADII, ORDER(2:MID), 1_INT64, LS, .TRUE.)
+    !$omp section
     !   build a tree with the root being the furthest from this center
     !   for the remaining "exterior" points of this center node.
     !   Only perform this operation if there are >0 points available.
     IF (MID < SIZE(ORDER)) &
          CALL BUILD_TREE_R64(POINTS, SQ_SUMS, RADII, &
          ORDER(MID+1:), 1_INT64, LS, .TRUE.)
+    !$omp end sections
+    !$omp end parallel
   END SUBROUTINE BUILD_TREE_R64
 
 
