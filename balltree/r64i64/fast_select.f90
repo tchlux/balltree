@@ -1,6 +1,6 @@
 MODULE FAST_SELECT
   USE ISO_FORTRAN_ENV, ONLY: REAL64, INT64
-  USE SWAP
+  USE SWAP, ONLY: SWAP_I64, SWAP_R64
   IMPLICIT NONE
 
 CONTAINS
@@ -80,18 +80,18 @@ CONTAINS
        L = LEFT
        R = RIGHT
        ! Move the partition element to the front of the list.
-       CALL SWAPR64(VALUES(LEFT), VALUES(K))
-       CALL SWAPI64(INDICES(LEFT), INDICES(K))
+       CALL SWAP_R64(VALUES(LEFT), VALUES(K))
+       CALL SWAP_I64(INDICES(LEFT), INDICES(K))
        ! Pre-swap the left and right elements (temporarily putting a
        ! larger element on the left) before starting the partition loop.
        IF (VALUES(RIGHT) .GT. P) THEN
-          CALL SWAPR64(VALUES(LEFT), VALUES(RIGHT))
-          CALL SWAPI64(INDICES(LEFT), INDICES(RIGHT))
+          CALL SWAP_R64(VALUES(LEFT), VALUES(RIGHT))
+          CALL SWAP_I64(INDICES(LEFT), INDICES(RIGHT))
        END IF
-       ! Now partition the elements about the pivot value "T".
+       ! Now partition the elements about the pivot value "P".
        DO WHILE (L .LT. R)
-          CALL SWAPR64(VALUES(L), VALUES(R))
-          CALL SWAPI64(INDICES(L), INDICES(R))
+          CALL SWAP_R64(VALUES(L), VALUES(R))
+          CALL SWAP_I64(INDICES(L), INDICES(R))
           L = L + 1
           R = R - 1
           DO WHILE (VALUES(L) .LT. P) ; L = L + 1 ; END DO
@@ -99,12 +99,12 @@ CONTAINS
        END DO
        ! Place the pivot element back into its appropriate place.
        IF (VALUES(LEFT) .EQ. P) THEN
-          CALL SWAPR64(VALUES(LEFT), VALUES(R))
-          CALL SWAPI64(INDICES(LEFT), INDICES(R))
+          CALL SWAP_R64(VALUES(LEFT), VALUES(R))
+          CALL SWAP_I64(INDICES(LEFT), INDICES(R))
        ELSE
           R = R + 1
-          CALL SWAPR64(VALUES(R), VALUES(RIGHT))
-          CALL SWAPI64(INDICES(R), INDICES(RIGHT))
+          CALL SWAP_R64(VALUES(R), VALUES(RIGHT))
+          CALL SWAP_I64(INDICES(R), INDICES(RIGHT))
        END IF
        ! adjust left and right towards the boundaries of the subset
        ! containing the (k - left + 1)th smallest element
@@ -153,18 +153,18 @@ CONTAINS
        L = LEFT
        R = RIGHT
        ! Move the partition element to the front of the list.
-       CALL SWAPI64(VALUES(LEFT), VALUES(K))
-       CALL SWAPI64(INDICES(LEFT), INDICES(K))
+       CALL SWAP_I64(VALUES(LEFT), VALUES(K))
+       CALL SWAP_I64(INDICES(LEFT), INDICES(K))
        ! Pre-swap the left and right elements (temporarily putting a
        ! larger element on the left) before starting the partition loop.
        IF (VALUES(RIGHT) .GT. P) THEN
-          CALL SWAPI64(VALUES(LEFT), VALUES(RIGHT))
-          CALL SWAPI64(INDICES(LEFT), INDICES(RIGHT))
+          CALL SWAP_I64(VALUES(LEFT), VALUES(RIGHT))
+          CALL SWAP_I64(INDICES(LEFT), INDICES(RIGHT))
        END IF
        ! Now partition the elements about the pivot value "T".
        DO WHILE (L .LT. R)
-          CALL SWAPI64(VALUES(L), VALUES(R))
-          CALL SWAPI64(INDICES(L), INDICES(R))
+          CALL SWAP_I64(VALUES(L), VALUES(R))
+          CALL SWAP_I64(INDICES(L), INDICES(R))
           L = L + 1
           R = R - 1
           DO WHILE (VALUES(L) .LT. P) ; L = L + 1 ; END DO
@@ -172,12 +172,12 @@ CONTAINS
        END DO
        ! Place the pivot element back into its appropriate place.
        IF (VALUES(LEFT) .EQ. P) THEN
-          CALL SWAPI64(VALUES(LEFT), VALUES(R))
-          CALL SWAPI64(INDICES(LEFT), INDICES(R))
+          CALL SWAP_I64(VALUES(LEFT), VALUES(R))
+          CALL SWAP_I64(INDICES(LEFT), INDICES(R))
        ELSE
           R = R + 1
-          CALL SWAPI64(VALUES(R), VALUES(RIGHT))
-          CALL SWAPI64(INDICES(R), INDICES(RIGHT))
+          CALL SWAP_I64(VALUES(R), VALUES(RIGHT))
+          CALL SWAP_I64(INDICES(R), INDICES(RIGHT))
        END IF
        ! adjust left and right towards the boundaries of the subset
        ! containing the (k - left + 1)th smallest element

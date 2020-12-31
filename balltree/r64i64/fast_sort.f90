@@ -1,6 +1,6 @@
 MODULE FAST_SORT
   USE ISO_FORTRAN_ENV, ONLY: REAL64, INT64
-  USE SWAP
+  USE SWAP, ONLY: SWAP_I64, SWAP_R64
   IMPLICIT NONE
 
 CONTAINS
@@ -74,17 +74,17 @@ CONTAINS
     MID = (1 + SIZE(VALUES)) / 2
     ! Swap the first and last elements (if the last is smaller).
     IF (VALUES(SIZE(VALUES)) < VALUES(1)) THEN
-       CALL SWAPR64(VALUES(1),  VALUES(SIZE(VALUES)))
-       CALL SWAPI64(INDICES(1), INDICES(SIZE(VALUES)))
+       CALL SWAP_R64(VALUES(1),  VALUES(SIZE(VALUES)))
+       CALL SWAP_I64(INDICES(1), INDICES(SIZE(VALUES)))
     END IF
     ! Swap the middle and first elements (if the middle is smaller).
     IF (VALUES(MID) < VALUES(SIZE(VALUES))) THEN
-       CALL SWAPR64(VALUES(MID),  VALUES(SIZE(VALUES)))
-       CALL SWAPI64(INDICES(MID), INDICES(SIZE(VALUES)))       
+       CALL SWAP_R64(VALUES(MID),  VALUES(SIZE(VALUES)))
+       CALL SWAP_I64(INDICES(MID), INDICES(SIZE(VALUES)))       
        ! Swap the last and first elements (if the last is smaller).
        IF (VALUES(SIZE(VALUES)) < VALUES(1)) THEN
-          CALL SWAPR64(VALUES(1),  VALUES(SIZE(VALUES)))
-          CALL SWAPI64(INDICES(1), INDICES(SIZE(VALUES)))
+          CALL SWAP_R64(VALUES(1),  VALUES(SIZE(VALUES)))
+          CALL SWAP_I64(INDICES(1), INDICES(SIZE(VALUES)))
        END IF
     END IF
     ! Set the pivot, LEFT index and RIGHT index (skip the smallest,
@@ -105,15 +105,15 @@ CONTAINS
           RIGHT = RIGHT - 1
        END DO
        ! Now we know that [VALUES(RIGHT) < PIVOT < VALUES(LEFT)], so swap them.
-       CALL SWAPR64(VALUES(LEFT),  VALUES(RIGHT))
-       CALL SWAPI64(INDICES(LEFT), INDICES(RIGHT))
+       CALL SWAP_R64(VALUES(LEFT),  VALUES(RIGHT))
+       CALL SWAP_I64(INDICES(LEFT), INDICES(RIGHT))
     END DO
     ! The last swap was done even though LEFT == RIGHT, we need to undo.
-    CALL SWAPR64(VALUES(LEFT),  VALUES(RIGHT))
-    CALL SWAPI64(INDICES(LEFT), INDICES(RIGHT))
+    CALL SWAP_R64(VALUES(LEFT),  VALUES(RIGHT))
+    CALL SWAP_I64(INDICES(LEFT), INDICES(RIGHT))
     ! Finally, we put the pivot back into its proper location.
-    CALL SWAPR64(VALUES(LEFT),  VALUES(SIZE(VALUES)))
-    CALL SWAPI64(INDICES(LEFT), INDICES(SIZE(VALUES)))
+    CALL SWAP_R64(VALUES(LEFT),  VALUES(SIZE(VALUES)))
+    CALL SWAP_I64(INDICES(LEFT), INDICES(SIZE(VALUES)))
   END FUNCTION ARGPARTITION
 
   ! Insertion sort (best for small lists).
@@ -127,8 +127,8 @@ CONTAINS
     IF (SIZE(VALUES) .LE. 1) RETURN
     ! Put the smallest value at the front of the list.
     I = MINLOC(VALUES,1)
-    CALL SWAPR64(VALUES(1),  VALUES(I))
-    CALL SWAPI64(INDICES(1), INDICES(I))
+    CALL SWAP_R64(VALUES(1),  VALUES(I))
+    CALL SWAP_I64(INDICES(1), INDICES(I))
     ! Insertion sort the rest of the array.
     DO I = 3, SIZE(VALUES)
        TEMP_VAL = VALUES(I)

@@ -3,13 +3,20 @@
 # TODO: Add another operation mode for a 'byte' tree.
 # TODO: Mix test cases for different type trees, make one testing suite.
 # TODO: If data is 'uint8' then add 128 to the values before building tree.
-# TODO: Add code for incrementally adding points to the tree
+
+# - Substitute in arbitrary metric function in Fortran code.
+# - Assign the metric before running the python, recompile for now.
+# - Use the metric to build and evaluate the tree.
+# - ACCEPT THAT IT WILL BE SLOWER, that can be fixed later, first step
+#   is to prove viable level of accuracy.
+# - Use the 1-norm, which should be considerably faster.
+# - Make "reorder" use a temporary file object in Fortran to reorder
+#   the points, that way it doesn't take up regular memory.
 
 import os 
 import fmodpy
 import numpy as np
-
-PATH_TO_HERE = os.path.dirname(os.path.abspath(__file__))
+PATH_TO_HERE   = os.path.dirname(os.path.abspath(__file__))
 
 # Allow OpenMP to create nested threads.
 from multiprocessing import cpu_count
@@ -21,23 +28,22 @@ if "OMP_MAX_ACTIVE_LEVELS" not in os.environ:
 if "OMP_NESTED" not in os.environ:
     os.environ["OMP_NESTED"] = "TRUE"
 
-# Define paths to the Fortran utilities.
-R64_DIR = os.path.join(PATH_TO_HERE, "r64i64")
-PATH_TO_BT_R64 = os.path.join(R64_DIR, "ball_tree.f90")
-PATH_TO_PRUNE = os.path.join(R64_DIR, "prune.f90")
-PATH_TO_SORT   = os.path.join(R64_DIR, "fast_sort.f90")
-PATH_TO_SELECT = os.path.join(R64_DIR, "fast_select.f90")
-# PATH_TO_BT_I8 = os.path.join(PATH_TO_HERE, "ball_tree_i8.f90")
-
 # Import the Fortran utilities.
-dependencies = ["swap.f90", "prune.f90", "fast_select.f90", "fast_sort.f90", "ball_tree.f90"]
-ball_tree_r64  = fmodpy.fimport(PATH_TO_BT_R64, output_dir=R64_DIR, omp=True,
-                                verbose=False, depends_files=dependencies,
-                                autocompile=False).ball_tree_r64
-prune = fmodpy.fimport(PATH_TO_PRUNE, output_dir=R64_DIR, verbose=False).prune
-fast_sort = fmodpy.fimport(PATH_TO_SORT, output_dir=R64_DIR, verbose=False).fast_sort
-fast_select = fmodpy.fimport(PATH_TO_SELECT, output_dir=R64_DIR, verbose=False).fast_select
-# ball_tree_i8  = fmodpy.fimport(PATH_TO_BT_I8, output_dir=PATH_TO_HERE, omp=True)
+PATH_TO_BT_R64 = os.path.join(PATH_TO_HERE, "ball_tree_r64.f90")
+ball_tree_r64  = fmodpy.fimport(PATH_TO_BT_R64, output_directory=PATH_TO_HERE,
+                               autocompile_extra_files=True, omp=True)
+PATH_TO_BT_I8 = os.path.join(PATH_TO_HERE, "ball_tree_i8.f90")
+ball_tree_i8  = fmodpy.fimport(PATH_TO_BT_I8, output_directory=PATH_TO_HERE,
+                               autocompile_extra_files=True, omp=True)
+PATH_TO_PRUNE = os.path.join(PATH_TO_HERE, "prune.f90")
+prune = fmodpy.fimport(PATH_TO_PRUNE, output_directory=PATH_TO_HERE,
+                       autocompile_extra_files=True)
+PATH_TO_SORT   = os.path.join(PATH_TO_HERE, "fast_sort.f90")
+fast_sort = fmodpy.fimport(PATH_TO_SORT, output_directory=PATH_TO_HERE,
+                           autocompile_extra_files=True)
+PATH_TO_SELECT = os.path.join(PATH_TO_HERE, "fast_select.f90")
+fast_select = fmodpy.fimport(PATH_TO_SELECT, output_directory=PATH_TO_HERE,
+                             autocompile_extra_files=True)
 
 # ------------------------------------------------------------------
 #                        FastSort method
@@ -140,21 +146,15 @@ class BallTree:
     def _set_type_internals(self):
         # Declare the methods based on the dtype.
         if ('int8' in str(self.ttype)):
-            if ('uint8' in str(self.ttype)):
-                import warnings
-                warnings.warn("This ball tree only handles signed integers. Make sure to subtract 128 from all provided values before using this code.")
             self.sstype = np.int64
             self._build_tree = ball_tree_i8.build_tree
             self._fix_order  = ball_tree_i8.fix_order
             self._bt_nearest = ball_tree_i8.nearest
-            # TODO: Need to write "approx nearest" function for I8.
-            self._bt_approx_nearest = lambda *args, **kwargs: print("ERROR: Unsupported operation.")
         elif ('float64' in str(self.ttype)):
             self.sstype = np.float64
             self._build_tree = ball_tree_r64.build_tree
             self._fix_order  = ball_tree_r64.fix_order
             self._bt_nearest = ball_tree_r64.nearest
-            self._bt_approx_nearest = ball_tree_r64.approx_nearest
         else:
             class UnsupportedType(Exception): pass
             raise(UnsupportedType(f"The type '{dtype.name}' is not supported."))
@@ -198,9 +198,8 @@ class BallTree:
                 self.size += points.shape[1]
                 self.tree = np.zeros((dim, self.size), dtype=self.ttype)
                 # Assign the relevant internals for this tree.
-                self.sq_sums = np.zeros(self.tree.shape[1],  dtype=self.sstype)
                 self.order   = np.arange(self.tree.shape[1], dtype='int64') + 1
-                self.radii   = np.zeros(self.tree.shape[1],  dtype='float64')
+                self.radii   = np.zeros(self.tree.shape[1],  dtype=self.sstype)
                 # Pack the old points and the new points into a single tree.
                 self.tree[:,:old_points.shape[1]] = old_points
                 self.tree[:,old_points.shape[1]:] = points
@@ -212,46 +211,43 @@ class BallTree:
             # Save the points internally as the tree.
             self.tree    = np.asarray(points, order='F', dtype=self.ttype)
             # Assign the relevant internals for this tree.
-            self.sq_sums = np.zeros(self.tree.shape[1],  dtype=self.sstype)
             self.order   = np.arange(self.tree.shape[1], dtype='int64') + 1
-            self.radii   = np.zeros(self.tree.shape[1],  dtype='float64')
+            self.radii   = np.zeros(self.tree.shape[1],  dtype=self.sstype)
             # Store BallTree internals for knowing how to evaluate.
             self.built = 0
             self.size = self.tree.shape[1]
 
     # Build a tree out.
-    def build(self, leaf_size=None, reorder=True, has_sq_sums=False, root=None):
+    def build(self, leaf_size=None, reorder=None, root=None):
         # Get the leaf size if it was not given.
         if (leaf_size is None): leaf_size = self.leaf_size
         # Translate the root from python index to fortran index if provided.
-        if (root is not None): root += 1
+        if (root is not None):  root += 1
         # Automatically set 'reorder' to False if the array is more than
         # 1 GB in size because this requires a doubling of memory usage.
         if (reorder is None):   reorder = (self.tree.nbytes / 2**30) <= 1
         # Build tree (in-place operation).
         #    .tree     will not be modified
-        #    .sq_sums  will contain the squared sums of each point
         #    .radii    will be modified to have the radius of specific
         #              node, or 0.0 if this point is a leaf.
         #    .order    will be the list of indices (1-indexed) that
         #              determine the structure of the ball tree.
         order = self._get_order(search=False)
-        self._build_tree(self.tree, self.sq_sums, self.radii, order,
-                         leaf_size=leaf_size, computed_sq_sums=has_sq_sums, 
-                         root=root)
+        self._build_tree(self.tree, self.radii, order,
+                         leaf_size=leaf_size, root=root)
         self.built = len(order)
         # Store the index mapping from the build.
         if hasattr(self, "index_mapping"): del self.index_mapping
         self.index_mapping = order.copy() - 1
         # Restructure the ball tree so the points are in locally
         # contiguous blocks of memory (local by branch + leaf).
-        if reorder: self._fix_order(self.tree, self.sq_sums, self.radii, order)
+        if reorder: self._fix_order(self.tree, self.radii, order)
 
     # Restructure the ball tree so the points are in locally
     # contiguous blocks of memory (local by branch + leaf).
     def reorder(self):
         order = self._get_order(search=True)
-        self._fix_order(self.tree, self.sq_sums, self.radii, order)
+        self._fix_order(self.tree, self.radii, order)
 
     # Find the "k" nearest neighbors to all points in z. Uses the same
     # interface as the "BallTree.nearest" function, see help for more info.
@@ -259,7 +255,7 @@ class BallTree:
 
     # Find the "k" nearest neighbors to all points in z.
     def nearest(self, z, k=1, leaf_size=None, return_distance=True,
-                transpose=True, max_search=None, look_ahead=None):
+                transpose=True, max_search=None):
         # Get the leaf size.
         if (leaf_size is None): leaf_size = self.leaf_size
         # If only a single point was given, convert it to a matrix.
@@ -271,17 +267,12 @@ class BallTree:
         # Initialize holders for output.
         points  = np.asarray(z, order='F', dtype=self.ttype)
         indices = np.ones((k, points.shape[1]), order='F', dtype='int64')
-        dists   = np.ones((k, points.shape[1]), order='F', dtype='float64')
+        dists   = np.ones((k, points.shape[1]), order='F', dtype=self.sstype)
         order = self._get_order(search=True)
         # Compute the nearest neighbors.
-        if look_ahead is None:
-            self._bt_nearest(points, k, self.tree, self.sq_sums, self.radii,
-                             order, leaf_size, indices, dists,
-                             to_search=max_search)
-        else:
-            self._bt_approx_nearest(points, k, self.tree, self.sq_sums, self.radii,
-                                    order, leaf_size, indices, dists,
-                                    look_ahead=look_ahead)
+        self._bt_nearest(points, k, self.tree, self.radii, order,
+                         leaf_size, indices, dists,
+                         to_search=max_search)
         # Return the results.
         if return_distance:
             if transpose: return dists.T, indices.T - 1
@@ -347,4 +338,7 @@ class BallTree:
         self.order[:self.size] = self.order[indices]
         # Rebuild the tree if desired.
         if build: self.build(root=0)
+
+
+
 

@@ -1,0 +1,63 @@
+MODULE L2_REAL64
+  USE ISO_FORTRAN_ENV, ONLY: REAL64, INT64
+  IMPLICIT NONE
+
+  ! Assign the names for the types in this module.
+  INTEGER, PARAMETER :: PNT=REAL64 ! "PoiNT' data type.
+  INTEGER, PARAMETER :: RAD=REAL64 ! "RADius" data type.
+  INTEGER, PARAMETER :: IDX=INT64  ! "InDeX" data type.
+  INTEGER, PARAMETER :: DST=REAL64 ! "DiSTance" data type.
+  INTEGER, PARAMETER :: ITL=REAL64 ! "InTernal" data type.
+
+  ! Define storage space for internal data to this metric.
+  REAL(KIND=PNT), ALLOCATABLE, DIMENSION(:,:) :: BUILD_POINTS
+  REAL(KIND=PNT), ALLOCATABLE, DIMENSION(:,:) :: SEARCH_POINTS
+  REAL(KIND=ITL), ALLOCATABLE, DIMENSION(:) :: BUILD_DATA
+  REAL(KIND=ITL), ALLOCATABLE, DIMENSION(:) :: SEARCH_DATA
+
+CONTAINS
+
+  SUBROUTINE COPY_METRIC_BUILD_DATA(DATA)
+    ! Copy the build data into the provided memory space.
+    REAL(KIND=ITL), INTENT(OUT), DIMENSION(:) :: DATA
+    DATA(:) = BUILD_DATA(:)
+  END SUBROUTINE COPY_METRIC_BUILD_DATA
+
+  SUBROUTINE METRIC_SETUP_BUILD(POINTS)
+    ! Compute the squared sum of each point, provided column vectors.
+    REAL(KIND=PNT), INTENT(IN), DIMENSION(:,:) :: POINTS
+    INTEGER :: I
+    BUILD_POINTS = POINTS
+    ! De-allocate existing build data if it is present.
+    IF (ALLOCATED(BUILD_DATA))  DEALLOCATE (BUILD_DATA)
+    ! Allocate build data.
+    ALLOCATE (BUILD_DATA(1:SIZE(POINTS,2)))
+    ! Compute the squared sums of points.
+    DO I = 1, SIZE(POINTS,2)
+       BUILD_DATA(I) = SUM(POINTS(:,I)**2)
+    END DO
+  END SUBROUTINE METRIC_SETUP_BUILD
+
+  SUBROUTINE METRIC_BUILD(POINTS, I1, I2, DISTANCE)
+    ! Compute the squared l2 distance between two indices.
+    REAL(KIND=PNT),    INTENT(IN), DIMENSION(:,:) :: POINTS
+    INTEGER(KIND=IDX), INTENT(IN)  :: I1, I2
+    REAL(KIND=DST),    INTENT(OUT) :: DISTANCE
+    DISTANCE = BUILD_DATA(I1) + BUILD_DATA(I2) - &
+         2 * DOT_PRODUCT(POINTS(:,I1), POINTS(:,I2))
+  END SUBROUTINE METRIC_BUILD
+
+  SUBROUTINE METRIC_SETUP_SEARCH(SEARCH_POINTS)
+    ! Compute the squared sum of each point
+    REAL(KIND=PNT), INTENT(IN), DIMENSION(:,:) :: SEARCH_POINTS
+  END SUBROUTINE METRIC_SETUP_SEARCH
+
+  SUBROUTINE METRIC_SEARCH(POINTS, SEARCH_POINTS, I1, I2, DISTANCE)
+    ! Compute the actual l2 distance between two indices.
+    REAL(KIND=PNT),    INTENT(IN), DIMENSION(:,:) :: POINTS, SEARCH_POINTS
+    INTEGER(KIND=IDX), INTENT(IN)  :: I1, I2
+    REAL(KIND=DST),    INTENT(OUT) :: DISTANCE
+  END SUBROUTINE METRIC_SEARCH
+
+END MODULE L2_REAL64
+

@@ -1,0 +1,36 @@
+PROGRAM TEST
+  USE ISO_FORTRAN_ENV, ONLY: REAL64, INT64
+  USE BALL_TREE_R64, ONLY: BUILD_TREE
+  
+  REAL(KIND=REAL64),   DIMENSION(2,8000000) :: POINTS
+  REAL(KIND=REAL64),   DIMENSION(SIZE(POINTS,2)) :: RADII
+  INTEGER(KIND=INT64), DIMENSION(SIZE(POINTS,2)) :: ORDER
+  INTEGER :: I
+
+  ! Set all of the 'order' indices.
+  FORALL (I = 1:SIZE(ORDER))
+     ORDER(I) = I
+  END FORALL
+
+  ! Initialize random point values.
+  CALL RANDOM_NUMBER(POINTS)
+
+  ! PRINT *, 'ORDER:', ORDER(:)
+  ! PRINT *, 'POINTS: '
+  ! DO I = 1, SIZE(ORDER)
+  !    PRINT *, '  ', POINTS(:,ORDER(I))
+  ! END DO
+  ! PRINT *, ''
+
+  PRINT *, 'Building tree..'
+  CALL BUILD_TREE(POINTS, RADII, ORDER)
+  PRINT *, 'Done.'
+
+  ! PRINT *, 'ORDER:', ORDER(:)
+  ! PRINT *, 'POINTS: '
+  ! DO I = 1, SIZE(ORDER)
+  !    PRINT *, '  ', POINTS(:,ORDER(I))
+  ! END DO
+  ! PRINT *, ''
+
+END PROGRAM TEST

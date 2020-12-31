@@ -3,10 +3,9 @@ import numpy as np
 TEST_SORT    = False
 TEST_TREE    = False
 TEST_PRUNE   = False
-TEST_APPROX  = True
-LARGE_TEST   = False
-INTEGER_TEST = False
-COMPARE_AGAINST_SKLEARN = False
+LARGE_TEST   = True
+INTEGER_TEST = True
+COMPARE_AGAINST_SKLEARN = True
 
 
 if TEST_SORT:
@@ -43,26 +42,18 @@ if TEST_SORT:
         print(x)
         print(x[ids-1])
         exit()
-    print("argsort: %.6f"%(t.total))
+    print("argsort:", t())
     # Test the NumPy code.
     pts = x.copy()
     ids = i.copy()
     t.start()
     ids = pts.argsort()
     t.stop()
-    print("numpy:   %.6f"%(t.total))
+    print("numpy:  ", t())
+
 
 if TEST_PRUNE:
-    from balltree import BallTree, prune
-    
-    tree_size = 14
-    level = 3
-    indices = np.zeros(2**level, order='F', dtype=np.int64)
-    indices, found = prune.level(tree_size, level, indices)
-    assert(found == 7)
-    assert(tuple(indices) == (4,5,7,8,11,12,14,0))
-
-
+    from balltree import BallTree
     # Function for verifying correctness.
     def small_diff(v1,v2): return abs(v1 - v2) < .01
     # Build a tree over random points in 1 dimension.
@@ -114,36 +105,13 @@ if TEST_PRUNE:
     assert(small_diff(tree[0][0], .5))
 
 
-if TEST_APPROX:
-    from balltree import BallTree
-    size = (15,1)
-    x = np.linspace(0,size[0]-1,size[0]).reshape(size)
-    print("x: ",x)
-    # 
-    print("Building tree..", flush=True)
-    k = 5
-    leaf_size = 1
-    tree = BallTree(x, leaf_size=leaf_size)
-    print("tree: ",tree)
-    print("x: ",x)
-    # 
-    z = np.array([[1.0,]])
-    d, i = tree.nearest(z)
-    print("d: ",d)
-    print("i: ",i)
-    print("tree[i[0]]: ",tree[i[0,0]])
-    print()
-    print(tree.nearest(z, look_ahead=2))
-
-
 
 if TEST_TREE:
     from balltree import BallTree
     np.random.seed(0)
 
     # if LARGE_TEST: size = (20000000,10)
-    # if LARGE_TEST: size = (100000,1000)
-    if LARGE_TEST: size = (32000,2)
+    if LARGE_TEST: size = (100000,1000)
     else:          size = (4,2)
     print()
     print(f"Allocating array.. {size}", flush=True)
@@ -165,15 +133,15 @@ if TEST_TREE:
     t = Timer()
     t.start()
 
-    k = 500
+    k = 5
     leaf_size = 1
     tree = BallTree(x, leaf_size=leaf_size)
 
     t.stop()
     print(f"done in {t()} seconds.", flush=True)
+    print()
 
     if len(x) < 20:
-        print()
         print('-'*70)
         print("Tree:")
         print(tree.tree.T)
@@ -194,15 +162,10 @@ if TEST_TREE:
 
     if not LARGE_TEST: print("\nz: ",z,"\n")
 
-    
-    t.start()
     d,i = tree.query(z, k=k)
-    t.stop()
-    print("lookup in",t(),"seconds")
     d,i = d[0], i[0]
     # i = tree.index_mapping[i]
     true_dists = np.linalg.norm(np.float64(x) - np.float64(z[0,:]), axis=1)
-    print()
     print("Tree/Truth")
     print("i: \n",i,"\n",np.argsort(true_dists)[:k])
     print("d: \n",d,"\n",np.sort(true_dists)[:k])
@@ -215,7 +178,7 @@ if COMPARE_AGAINST_SKLEARN:
     from util.system import Timer
     t = Timer()
 
-    if LARGE_TEST: train, dim = 1000000, 100
+    if LARGE_TEST: train, dim = 100000, 1000
     else:          train, dim = 7, 2
     test = 1
     leaf_size = 10
