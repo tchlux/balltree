@@ -33,7 +33,7 @@ PATH_TO_SELECT = os.path.join(R64_DIR, "fast_select.f90")
 dependencies = ["swap.f90", "prune.f90", "fast_select.f90", "fast_sort.f90", "ball_tree.f90"]
 ball_tree_r64  = fmodpy.fimport(PATH_TO_BT_R64, output_dir=R64_DIR, omp=True,
                                 verbose=False, depends_files=dependencies,
-                                autocompile=False).ball_tree_r64
+                                autocompile=True).ball_tree_r64
 prune = fmodpy.fimport(PATH_TO_PRUNE, output_dir=R64_DIR, verbose=False).prune
 fast_sort = fmodpy.fimport(PATH_TO_SORT, output_dir=R64_DIR, verbose=False).fast_sort
 fast_select = fmodpy.fimport(PATH_TO_SELECT, output_dir=R64_DIR, verbose=False).fast_select

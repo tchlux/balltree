@@ -6,6 +6,10 @@ MODULE BALL_TREE_R64
   USE FAST_SORT,   ONLY: ARGSORT
   IMPLICIT NONE
 
+  ! Max bytes for which a doubling of memory footprint (during copy)
+  !  is allowed to happen (switches to using scratch file instead).
+  INTEGER(KIND=INT64) :: MAX_COPY_BYTES = 2_INT64 ** 31_INT64
+
 CONTAINS
 
   ! Re-arrange elements of POINTS into a binary ball tree.
@@ -21,7 +25,7 @@ CONTAINS
     INTEGER(KIND=INT64) :: CENTER_IDX, MID, I, J, LS
     REAL(KIND=REAL64), DIMENSION(SIZE(POINTS,1)) :: PT
     REAL(KIND=REAL64), DIMENSION(SIZE(ORDER)) :: SQ_DISTS
-    REAL(KIND=REAL64) :: MAX_SQ_DIST, SQ_DIST
+    REAL(KIND=REAL64) :: MAX_SQ_DIST, SQ_DIST, SHIFT
     ! Set the leaf size to 1 by default (most possible work required,
     ! but guarantees successful use with any leaf size).
     IF (PRESENT(LEAF_SIZE)) THEN ; LS = LEAF_SIZE
@@ -30,40 +34,44 @@ CONTAINS
     ! If no squared sums were provided, compute them.
     IF (.NOT. PRESENT(COMPUTED_SQ_SUMS) .OR. &
          .NOT. COMPUTED_SQ_SUMS) THEN
+       !$OMP PARALLEL DO
        DO I = 1, SIZE(POINTS,2)
           SQ_SUMS(I) = SUM(POINTS(:,I)**2)
        END DO
+       !$OMP END PARALLEL DO
     END IF
-    ! Set the index of the 'split' 
+    ! Set the index of the 'root' of the tree.
     IF (PRESENT(ROOT)) THEN ; CENTER_IDX = ROOT
     ELSE
        ! 1) Compute distances between first point (random) and all others.
        ! 2) Pick the furthest point (on conv hull) from first as the center node.
        J = ORDER(1)
        PT(:) = POINTS(:,J)
-       CENTER_IDX = 1
-       MAX_SQ_DIST = 0.0_REAL64
-       DO I = 2, SIZE(ORDER)
-          SQ_DIST = SQ_SUMS(J) + SQ_SUMS(ORDER(I)) - &
+       SQ_DISTS(1) = 0.0_REAL64
+       !$OMP PARALLEL DO
+       ROOT_TO_ALL : DO I = 2, SIZE(ORDER)
+          SQ_DISTS(I) = SQ_SUMS(J) + SQ_SUMS(ORDER(I)) - &
                2 * DOT_PRODUCT(POINTS(:,ORDER(I)), PT(:))
-          ! If this is a new max distance, record this point.
-          IF (SQ_DIST .GT. MAX_SQ_DIST) THEN
-             MAX_SQ_DIST = SQ_DIST
-             CENTER_IDX = I
-          END IF
-       END DO
+       END DO ROOT_TO_ALL
+       !$OMP END PARALLEL DO
+       CENTER_IDX = MAXLOC(SQ_DISTS(:),1)
        ! Now CENTER_IDX is the selected center for this node in tree.
     END IF
+
     ! Move the "center" to the first position.
     CALL SWAP_I64(ORDER(1), ORDER(CENTER_IDX))
     ! Measure squared distance beween "center" node and all other points.
     J = ORDER(1)
     PT(:) = POINTS(:,J)
     SQ_DISTS(1) = 0.0_REAL64
+
+    !$OMP PARALLEL DO
     CENTER_TO_ALL : DO I = 2, SIZE(ORDER)
        SQ_DISTS(I) = SQ_SUMS(J) + SQ_SUMS(ORDER(I)) - &
             2 * DOT_PRODUCT(POINTS(:,ORDER(I)), PT(:))
     END DO CENTER_TO_ALL
+    !$OMP END PARALLEL DO
+
     ! Base case for recursion, once we have few enough points, exit.
     IF (SIZE(ORDER) .LE. LS) THEN
        RADII(ORDER(1)) = SQRT(MAXVAL(SQ_DISTS))
@@ -76,6 +84,7 @@ CONTAINS
        RADII(ORDER(2)) = 0.0_REAL64
        RETURN
     END IF
+
     ! Rearrange "SQ_DISTS" about the median value.
     ! Compute the last index that will belong "inside" this node.
     MID = (SIZE(ORDER) + 2) / 2
@@ -86,10 +95,11 @@ CONTAINS
     I = MID + MAXLOC(SQ_DISTS(MID+1:),1)
     ! Store the "radius" of this ball, the furthest point.
     RADII(ORDER(1)) = SQRT(SQ_DISTS(I))
-    ! Move the furthest point into the spot after the median (outer root).
-    CALL SWAP_I64(ORDER(I), ORDER(MID+1))
     ! Move the median point (furthest "interior") to the front (inner root).
     CALL SWAP_I64(ORDER(2), ORDER(MID))
+    ! Move the furthest point into the spot after the median (outer root).
+    CALL SWAP_I64(ORDER(MID+1), ORDER(I))
+
     !$OMP PARALLEL NUM_THREADS(2)
     !$OMP SECTIONS
     !$OMP SECTION
@@ -424,23 +434,27 @@ CONTAINS
     INTEGER(KIND=INT64) :: I
     ! Default to copy (in memory) if there is less than 1 GB of data.
     IF (PRESENT(COPY)) THEN ; SHOULD_COPY = COPY
-    ELSE ;                    SHOULD_COPY = SIZEOF(POINTS) .LE. 2**30
+    ELSE ; SHOULD_COPY = SIZEOF(POINTS) .LE. MAX_COPY_BYTES
     END IF
-    ! Reorder all of the data.
-
-    ! IF (SHOULD_COPY) THEN
-    POINTS(:,:) = POINTS(:,ORDER)
-    ! ELSE
-    !    OPEN( 1, STATUS='SCRATCH', ACCESS='WRITE')
-    !    DO I = 1, SIZE(POINTS,2)
-    !    END DO
-    !    ! Write the data in the correct order to a file.
-    !    ! Read the correctly ordered data back into memory
-    ! END IF
-
+    ! Reorder all of the data. Use a scratch file for large data sets.
+    IF (SHOULD_COPY) THEN
+       POINTS(:,:) = POINTS(:,ORDER)
+    ELSE
+       ! Open scratch file for writing all of the points in order.
+       OPEN(UNIT=1, STATUS='SCRATCH', ACTION='READWRITE', FORM='UNFORMATTED', ACCESS='STREAM')
+       ! Write all points to a scratch file in the correct order.
+       DO I = 1, SIZE(ORDER)
+          WRITE(UNIT=1) POINTS(:,ORDER(I))
+       END DO
+       ! Read all points from file (they are now ordered correctly).
+       READ(UNIT=1,POS=1) POINTS(:,:)
+       ! Close scratch file.
+       CLOSE(UNIT=1)
+    END IF
     ! Always copy the square sums and the radii in memory (shouldn't be bad).
     SQ_SUMS(:) = SQ_SUMS(ORDER)
     RADII(:) = RADII(ORDER)
+    ! Reset the order because now it is the expected format.
     FORALL (I=1:SIZE(ORDER)) ORDER(I) = I
   END SUBROUTINE FIX_ORDER
 

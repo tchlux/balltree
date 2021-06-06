@@ -2,3 +2,10 @@
 __pycache__
 *.pyc
 *.so
+*.o
+*.mod
+*_OLD
+balltree/r64i64/ball_tree
+balltree/r64i64/fast_select
+balltree/r64i64/fast_sort
+balltree/r64i64/prune
