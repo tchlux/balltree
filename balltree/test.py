@@ -2,11 +2,100 @@ import numpy as np
 
 
 LARGE_TEST   = True
-TEST_TREE    = True
-COMPARE_AGAINST_SKLEARN = False
+COMPARE_AGAINST_SKLEARN = True
+TEST_TREE    = False
 TEST_APPROX  = False
 TEST_PRUNE   = False
 TEST_SORT    = False
+
+
+# × SUM(SQ) - 3.17 2.37 2.36 2.33 2.33
+# ✓ OMP     - 2.51 2.31 2.30 2.26 2.27
+# × PRE-ADD - 2.35 2.33 2.31 2.27 2.35
+
+
+if COMPARE_AGAINST_SKLEARN:
+    print()
+    print("="*70)
+
+    from util.system import Timer
+    t = Timer()
+
+    if LARGE_TEST: train, dim = 100000, 100
+    else:          train, dim = 7, 2
+    test = 1
+    leaf_size = 10
+    k = 1
+    print("Initializing data..", flush=True)
+    np.random.seed(0)
+    x = np.random.random(size=(train,dim))
+    z = np.random.random(size=(test,dim))
+    print()
+    print("x:", x.shape)
+    print("z:", z.shape)
+
+    # ----------------------------------------------------------------
+    from balltree import BallTree as BT
+    print()
+    print("Fortran Ball Tree")
+    t.start()
+    tree = BT(x, leaf_size=leaf_size)
+    ct = t.stop()
+    print("Construction time:", ct)
+    t.start()
+    # TODO: Approximate nearest doesn't work for K > 1, and it doesn't
+    #       record the distances measured while doing look aheads.
+    d, i = tree.query(z, k=k) #, look_ahead=4, randomized=True)
+    qt = t.stop()
+    print("Query time:       ", qt)
+    print("d: ",d[0])
+    print("i: ",i[0])
+    d1, i1 = d[0].copy(), i[0].copy()
+    # ----------------------------------------------------------------
+    from sklearn.neighbors import BallTree
+    print()
+    print("Sklearn Ball Tree")
+    t.start()
+    tree = BallTree(x, leaf_size=leaf_size)
+    ct = t.stop()
+    print("Construction time:", ct)
+    t.start()
+    d, i = tree.query(z, k=k)
+    qt = t.stop()
+    print("Query time:       ", qt)
+    print("d: ",d[0])
+    print("i: ",i[0])
+    d2, i2 = d[0].copy(), i[0].copy()
+
+    # ----------------------------------------------------------------
+    print()
+    print("Brute Force")
+    # Convert to float64 (for regular test this does nothing, for integer...
+    x = x.astype('float64')
+    z = z.astype('float64')
+    t.start()
+    d = np.sqrt(np.sum(x**2, axis=1) + np.sum(z[0]**2) - 2 * np.dot(x, z[0]))
+    i = np.argsort(d)
+    qt = t.stop()
+    print("Query time:", qt)
+    i = i[:k]
+    d = d[i]
+    print("d: ",d)
+    print("i: ",i)
+    d3, i3 = d.copy(), i.copy()
+
+    # ----------------------------------------------------------------
+    max_diff = max(max(abs(d1 - d2)), max(abs(d1-d3)))
+    ds_match = max_diff < 2**(-26)
+    is_match = np.all(i1 == i2) and np.all(i1 == i3)
+    print()
+    print(f"Max difference in distance calculations:\n   {max_diff:.3e}")
+    try: assert(ds_match and is_match)
+    except:
+        print()
+        print("ERROR")
+        print( "  is_match: ",is_match)
+        print(f"  ds_match:  {ds_match} {max(abs(d1-d3)):.3e} {max(abs(d1 - d2)):.3e}")
 
 
 if TEST_TREE:
@@ -75,89 +164,6 @@ if TEST_TREE:
     print("d: \n",d,"\n",np.sort(true_dists)[:k])
 
 
-if COMPARE_AGAINST_SKLEARN:
-    print()
-    print("="*70)
-
-    from util.system import Timer
-    t = Timer()
-
-    if LARGE_TEST: train, dim = 1000000, 100
-    else:          train, dim = 7, 2
-    test = 1
-    leaf_size = 10
-    k = 1
-    print("Initializing data..", flush=True)
-    np.random.seed(0)
-    x = np.random.random(size=(train,dim))
-    z = np.random.random(size=(test,dim))
-    print()
-    print("x:", x.shape)
-    print("z:", z.shape)
-
-    # ----------------------------------------------------------------
-    from balltree import BallTree as BT
-    print()
-    print("Fortran Ball Tree")
-    t.start()
-    tree = BT(x, leaf_size=leaf_size)
-    ct = t.stop()
-    print("Construction time:", ct)
-    t.start()
-    d, i = tree.query(z, k=k)
-    qt = t.stop()
-    print("Query time:       ", qt)
-    print("d: ",d[0])
-    print("i: ",i[0])
-    d1, i1 = d[0].copy(), i[0].copy()
-    exit()
-    # ----------------------------------------------------------------
-    from sklearn.neighbors import BallTree
-    print()
-    print("Sklearn Ball Tree")
-    t.start()
-    tree = BallTree(x, leaf_size=leaf_size)
-    ct = t.stop()
-    print("Construction time:", ct)
-    t.start()
-    d, i = tree.query(z, k=k)
-    qt = t.stop()
-    print("Query time:       ", qt)
-    print("d: ",d[0])
-    print("i: ",i[0])
-    d2, i2 = d[0].copy(), i[0].copy()
-
-    # ----------------------------------------------------------------
-    print()
-    print("Brute Force")
-    # Convert to float64 (for regular test this does nothing, for integer...
-    x = x.astype('float64')
-    z = z.astype('float64')
-    t.start()
-    d = np.sqrt(np.sum(x**2, axis=1) + np.sum(z[0]**2) - 2 * np.dot(x, z[0]))
-    i = np.argsort(d)
-    qt = t.stop()
-    print("Query time:", qt)
-    i = i[:k]
-    d = d[i]
-    print("d: ",d)
-    print("i: ",i)
-    d3, i3 = d.copy(), i.copy()
-
-    # ----------------------------------------------------------------
-    max_diff = max(max(abs(d1 - d2)), max(abs(d1-d3)))
-    ds_match = max_diff < 2**(-26)
-    is_match = np.all(i1 == i2) and np.all(i1 == i3)
-    print()
-    print(f"Max difference in distance calculations:\n   {max_diff:.3e}")
-    try: assert(ds_match and is_match)
-    except:
-        print()
-        print("ERROR")
-        print( "  is_match: ",is_match)
-        print(f"  ds_match:  {ds_match} {max(abs(d1-d3)):.3e} {max(abs(d1 - d2)):.3e}")
-
-
 if TEST_APPROX:
     from balltree import BallTree
     size = (15,1)
@@ -177,7 +183,7 @@ if TEST_APPROX:
     print("i: ",i)
     print("tree[i[0]]: ",tree[i[0,0]])
     print()
-    print(tree.nearest(z, look_ahead=2))
+    print(tree.nearest(z, look_ahead=3))
 
 
 if TEST_PRUNE:

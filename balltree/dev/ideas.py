@@ -26,3 +26,19 @@
 # CALL SWAP_I64(ORDER(MID+1), ORDER(I))
 # # .02 .02 .02 .02 .02
 # --------------------------------------------------------------------------
+
+
+# -----------------------------------------------------------------------------
+#      OLD FORTRAN METHOD FOR DOING APPROXIMATE NEAREST NEIGHBOR
+# 
+# ! Find the minimum of the two.
+# IF (MINVAL(LEVEL_DISTS(1:I1)) .LE. MINVAL(LEVEL_DISTS(LMID+1:LMID+I2))) THEN
+#    ! The left is better.
+#    CALL PT_APPROX_NEAREST(POINT, K, TREE, SQ_SUMS, RADII, ORDER(2:MID), &
+#         LEAF_SIZE, INDICES, DISTS, LOOK_AHEAD, FOUND, PT_SS, RANDOM_TRAVERSAL)
+# ELSE
+#    ! The right is better.
+#    CALL PT_APPROX_NEAREST(POINT, K, TREE, SQ_SUMS, RADII, ORDER(MID+1:), &
+#         LEAF_SIZE, INDICES, DISTS, LOOK_AHEAD, FOUND, PT_SS, RANDOM_TRAVERSAL)
+# END IF
+# -----------------------------------------------------------------------------

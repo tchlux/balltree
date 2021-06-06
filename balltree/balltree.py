@@ -259,7 +259,8 @@ class BallTree:
 
     # Find the "k" nearest neighbors to all points in z.
     def nearest(self, z, k=1, leaf_size=None, return_distance=True,
-                transpose=True, max_search=None, look_ahead=None):
+                transpose=True, max_search=None, look_ahead=None,
+                randomized=False):
         # Get the leaf size.
         if (leaf_size is None): leaf_size = self.leaf_size
         # If only a single point was given, convert it to a matrix.
@@ -281,7 +282,7 @@ class BallTree:
         else:
             self._bt_approx_nearest(points, k, self.tree, self.sq_sums, self.radii,
                                     order, leaf_size, indices, dists,
-                                    look_ahead=look_ahead)
+                                    look_ahead=look_ahead, randomized=randomized)
         # Return the results.
         if return_distance:
             if transpose: return dists.T, indices.T - 1

@@ -26,6 +26,7 @@ CONTAINS
     REAL(KIND=REAL64), DIMENSION(SIZE(POINTS,1)) :: PT
     REAL(KIND=REAL64), DIMENSION(SIZE(ORDER)) :: SQ_DISTS
     REAL(KIND=REAL64) :: MAX_SQ_DIST, SQ_DIST, SHIFT
+    EXTERNAL :: DGEMM
     ! Set the leaf size to 1 by default (most possible work required,
     ! but guarantees successful use with any leaf size).
     IF (PRESENT(LEAF_SIZE)) THEN ; LS = LEAF_SIZE
@@ -284,7 +285,7 @@ CONTAINS
 
   ! Compute the K nearest elements of TREE to each point in POINTS.
   SUBROUTINE APPROX_NEAREST(POINTS, K, TREE, SQ_SUMS, RADII, ORDER, &
-       LEAF_SIZE, INDICES, DISTS, LOOK_AHEAD)
+       LEAF_SIZE, INDICES, DISTS, LOOK_AHEAD, RANDOMIZED)
     REAL(KIND=REAL64), INTENT(IN), DIMENSION(:,:) :: POINTS, TREE
     REAL(KIND=REAL64), INTENT(IN), DIMENSION(:)   :: SQ_SUMS
     REAL(KIND=REAL64), INTENT(IN), DIMENSION(:)   :: RADII
@@ -293,12 +294,16 @@ CONTAINS
     INTEGER(KIND=INT64), INTENT(OUT), DIMENSION(K,SIZE(POINTS,2)) :: INDICES
     REAL(KIND=REAL64),   INTENT(OUT), DIMENSION(K,SIZE(POINTS,2)) :: DISTS
     INTEGER(KIND=INT64), INTENT(IN),  OPTIONAL    :: LOOK_AHEAD
+    LOGICAL, INTENT(IN), OPTIONAL :: RANDOMIZED
     ! Local variables.
+    LOGICAL :: RANDOM_TRAVERSAL
     INTEGER(KIND=INT64) :: I, B, LH
     INTEGER(KIND=INT64), DIMENSION(:), ALLOCATABLE :: INDS_BUFFER
     REAL(KIND=REAL64),   DIMENSION(:), ALLOCATABLE :: DISTS_BUFFER
     IF (PRESENT(LOOK_AHEAD)) THEN ; LH = LOOK_AHEAD
     ELSE ; LH = 3 ; END IF
+    IF (PRESENT(RANDOMIZED)) THEN ; RANDOM_TRAVERSAL = RANDOMIZED
+    ELSE ; RANDOM_TRAVERSAL = .FALSE. ; END IF
     ! END IF
     ! Allocate the buffers for holding the nearest indices and distances.
     ALLOCATE( INDS_BUFFER(1:K+2**LH), DISTS_BUFFER(1:K+2**LH) )
@@ -307,7 +312,8 @@ CONTAINS
     !$OMP PARALLEL DO PRIVATE(INDS_BUFFER, DISTS_BUFFER, B)
     DO I = 1, SIZE(POINTS,2)
        CALL PT_APPROX_NEAREST(POINTS(:,I), K, TREE, SQ_SUMS, RADII, &
-            ORDER, LEAF_SIZE, INDS_BUFFER, DISTS_BUFFER, LH)
+            ORDER, LEAF_SIZE, INDS_BUFFER, DISTS_BUFFER, LH, &
+            RANDOMIZED=RANDOM_TRAVERSAL)
        ! Sort the first K elements of the temporary arry for return.
        INDICES(:,I) = INDS_BUFFER(:K)
        DISTS(:,I) = DISTS_BUFFER(:K)
@@ -318,7 +324,8 @@ CONTAINS
   ! Compute the K nearest elements of TREE to each point in POINTS
   ! using the "look ahead" method for determining tree traversal.
   RECURSIVE SUBROUTINE PT_APPROX_NEAREST(POINT, K, TREE, SQ_SUMS, &
-       RADII, ORDER, LEAF_SIZE, INDICES, DISTS, LOOK_AHEAD, FOUND, PT_SS)
+       RADII, ORDER, LEAF_SIZE, INDICES, DISTS, LOOK_AHEAD, FOUND, &
+       PT_SS, RANDOMIZED)
     REAL(KIND=REAL64), INTENT(IN), DIMENSION(:)   :: POINT
     REAL(KIND=REAL64), INTENT(IN), DIMENSION(:,:) :: TREE
     REAL(KIND=REAL64), INTENT(IN), DIMENSION(:)   :: SQ_SUMS
@@ -329,13 +336,21 @@ CONTAINS
     REAL(KIND=REAL64),   INTENT(OUT), DIMENSION(:) :: DISTS
     INTEGER(KIND=INT64), INTENT(INOUT), OPTIONAL   :: FOUND
     REAL(KIND=REAL64),   INTENT(IN),    OPTIONAL   :: PT_SS
+    LOGICAL, INTENT(IN), OPTIONAL :: RANDOMIZED
     ! Local variables
     INTEGER(KIND=INT64) :: F, I, I1, I2, MID, LMID
     REAL(KIND=REAL64)   :: D, D1, D2
     REAL(KIND=REAL64)   :: PS
+    LOGICAL :: RANDOM_TRAVERSAL
     ! Storage space for the inner and outer children indices / distances.
     INTEGER(KIND=INT64), DIMENSION(1:2**LOOK_AHEAD) :: LEVEL_INDS
     REAL(KIND=REAL64), DIMENSION(1:2**LOOK_AHEAD) :: LEVEL_DISTS
+    ! Initialize randomization.
+    IF (PRESENT(RANDOMIZED)) THEN
+       RANDOM_TRAVERSAL = RANDOMIZED
+    ELSE
+       RANDOM_TRAVERSAL = .FALSE.
+    END IF
     ! Initialize FOUND for first call, if FOUND is present then
     ! this must not be first and all are present.
     INITIALIZE : IF (PRESENT(FOUND)) THEN
@@ -357,15 +372,11 @@ CONTAINS
        BRANCH_OR_LEAF : IF (SIZE(ORDER) .GT. 2*LEAF_SIZE+1) THEN
           ! Compute the indices of the inner and outer children.
           MID = (SIZE(ORDER) + 2) / 2
-          LMID = LOOK_AHEAD / 2
-          CALL LEVEL(MID-1, LOOK_AHEAD-1, LEVEL_INDS(:LMID), I1)
-          CALL LEVEL(SIZE(ORDER)-MID, LOOK_AHEAD-1, LEVEL_INDS(LMID+1:), I2)
-          PRINT *, ''
-          PRINT *, 'LOOK_AHEAD         ', LOOK_AHEAD
-          PRINT *, 'LMID:              ', LMID
-          PRINT *, 'LEVEL_INDS(:)      ', LEVEL_INDS(:)
-          PRINT *, 'LEVEL_INDS(:LMID)  ', LEVEL_INDS(:LMID)
-          PRINT *, 'LEVEL_INDS(LMID+1:)', LEVEL_INDS(LMID+1:)
+          LMID = 2 ** (LOOK_AHEAD - 1)
+          I1 = 0_INT64
+          CALL LEVEL(MID-1, LOOK_AHEAD-1, LEVEL_INDS(:LMID), I1, 2_INT64)
+          I2 = 0_INT64
+          CALL LEVEL(SIZE(ORDER)-MID, LOOK_AHEAD-1, LEVEL_INDS(LMID+1:), I2, MID+1)
           ! Compute distance to the LOOK_AHEAD next level.
           ! Traverse down the branch that looks better.
           ! 
@@ -379,15 +390,31 @@ CONTAINS
              LEVEL_DISTS(I) = SQRT(PS + SQ_SUMS(ORDER(LEVEL_INDS(I))) - &
                   2*DOT_PRODUCT(POINT(:),TREE(:,ORDER(LEVEL_INDS(I)))))
           END DO
-          ! Find the minimum of the two.
-          IF (MINVAL(LEVEL_DISTS(1:I1)) .LE. MINVAL(LEVEL_DISTS(LMID+1:LMID+I2))) THEN
-             ! The left is better.
+          ! Compute the probability that the inner (left) is less than the outer (right).
+          CALL PROBABILITY_LESS_THAN(LEVEL_DISTS(1:I1), LEVEL_DISTS(LMID+1:LMID+I2), D1)
+          ! Compute the probability that the outer (right) is less than the inner (left).
+          CALL PROBABILITY_LESS_THAN(LEVEL_DISTS(LMID+1:LMID+I2), LEVEL_DISTS(1:I1), D2)
+          ! Compute the probability of traversing for randomized search.
+          IF (RANDOM_TRAVERSAL) THEN
+             ! Normalize the probability that D1 is less.
+             D1 = D1 / (D1 + D2)
+             ! Generate a random number to decide which path to traverse.
+             CALL RANDOM_NUMBER(D)
+             ! Determine whether or not D1 is less than D2 based on randomness.
+             IF (D1 .LE. D) THEN
+                D1 = 2.0_REAL64
+             ELSE
+                D1 = -1.0_REAL64
+             END IF
+          END IF
+          ! Traverse inner (left).
+          IF (D1 .GE. D2) THEN
              CALL PT_APPROX_NEAREST(POINT, K, TREE, SQ_SUMS, RADII, ORDER(2:MID), &
-                  LEAF_SIZE, INDICES, DISTS, LOOK_AHEAD, FOUND, PT_SS)
+                  LEAF_SIZE, INDICES, DISTS, LOOK_AHEAD, FOUND, PT_SS, RANDOM_TRAVERSAL)
+          ! Traverse outer (right).
           ELSE
-             ! The right is better.
              CALL PT_APPROX_NEAREST(POINT, K, TREE, SQ_SUMS, RADII, ORDER(MID+1:), &
-                  LEAF_SIZE, INDICES, DISTS, LOOK_AHEAD, FOUND, PT_SS)
+                  LEAF_SIZE, INDICES, DISTS, LOOK_AHEAD, FOUND, PT_SS, RANDOM_TRAVERSAL)
           END IF
        ELSE
           ! This is a leaf, distances need to be measured to all the
@@ -422,6 +449,71 @@ CONTAINS
     END IF SORT_K
   END SUBROUTINE PT_APPROX_NEAREST
 
+  ! Given two lists of numbers, compute the probability that a random
+  !  number selected from the first list is less than a random number
+  !  selected from the second list.
+  SUBROUTINE PROBABILITY_LESS_THAN(L1, L2, P)
+    REAL(KIND=REAL64), INTENT(INOUT), DIMENSION(:) :: L1, L2
+    REAL(KIND=REAL64), INTENT(OUT) :: P
+    ! Local variables.
+    INTEGER(KIND=INT64), DIMENSION(SIZE(L2)) :: INDS
+    INTEGER(KIND=INT64) :: I, J, COUNT
+    ! Sort the second list.
+    CALL ARGSORT(L2(:), INDS(:))
+    ! Sum the probabilities that each element in L1 is less than a
+    !  a random element for L2, then divide by the size of L1.
+    COUNT = 0
+    DO I = 1, SIZE(L1)
+       CALL FIRST_GREATER_OR_EQUAL(L2, L1(I), J)
+       COUNT = COUNT + (SIZE(L2) - J + 1)
+    END DO
+    P = REAL(COUNT, KIND=REAL64) / REAL(SIZE(L2)*SIZE(L1), KIND=REAL64)
+
+  CONTAINS
+    ! Identify the index of the first element in a list that is greater
+    !  than or equal to a given value.
+    SUBROUTINE FIRST_GREATER_OR_EQUAL(LIST, VAL, INDEX)
+      REAL(KIND=REAL64), INTENT(IN), DIMENSION(:) :: LIST
+      REAL(KIND=REAL64), INTENT(IN) :: VAL
+      INTEGER(KIND=INT64), INTENT(OUT) :: INDEX
+      ! Local variables.
+      INTEGER(KIND=INT64) :: FRONT, BACK
+      ! Check for special case where every value in the list is greater.
+      IF (LIST(1) .GE. VAL) THEN
+         INDEX = 1
+         RETURN
+      END IF
+      ! Check for special case where every value in the list is less.
+      IF (LIST(SIZE(LIST)) .LT. VAL) THEN
+         INDEX = SIZE(LIST)+1
+         RETURN
+      END if
+      ! Perform a binary search to find the first index of an element
+      ! in the list that is strictly less than the given value.
+      FRONT = 1
+      BACK = SIZE(L2)
+      binary_search : DO WHILE (FRONT .LT. BACK)
+         INDEX = (FRONT + BACK) / 2
+         ! Check loop termination condition.
+         IF ((INDEX .EQ. FRONT) .OR. (INDEX .EQ. BACK)) THEN
+            IF (LIST(FRONT) .GE. VAL) THEN
+               INDEX = FRONT
+            ELSE
+               INDEX = BACK
+            END IF
+            RETURN
+         ! Shrink front and back towards each other.
+         ELSE
+            IF (LIST(INDEX) .LT. VAL) THEN
+               FRONT = INDEX
+            ELSE
+               BACK = INDEX
+            END IF
+         END IF
+      END DO binary_search
+    END SUBROUTINE FIRST_GREATER_OR_EQUAL
+
+  END SUBROUTINE PROBABILITY_LESS_THAN
 
   ! Re-organize a built tree so that it is more usefully packed in memory.
   SUBROUTINE FIX_ORDER(POINTS, SQ_SUMS, RADII, ORDER, COPY)
@@ -459,3 +551,15 @@ CONTAINS
   END SUBROUTINE FIX_ORDER
 
 END MODULE BALL_TREE_R64
+
+
+!2021-06-06 12:10:09
+!
+          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+          ! PRINT *, ''                                                !
+          ! PRINT *, 'LOOK_AHEAD         ', LOOK_AHEAD                 !
+          ! PRINT *, 'LMID:              ', LMID                       !
+          ! PRINT *, 'LEVEL_INDS(:)      ', LEVEL_INDS(:)              !
+          ! PRINT *, 'LEVEL_INDS(:LMID)  ', LEVEL_INDS(:I1)            !
+          ! PRINT *, 'LEVEL_INDS(LMID+1:)', LEVEL_INDS(LMID+1:LMID+I2) !
+          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!

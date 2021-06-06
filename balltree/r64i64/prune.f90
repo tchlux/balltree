@@ -130,27 +130,20 @@ CONTAINS
   ! Get the indices of the level "LAYER" of this tree, with 0 being
   ! the root. List of indices is returned in "INDICES".
   RECURSIVE SUBROUTINE LEVEL(TREE_SIZE, LAYER, INDICES, &
-       FOUND, CURRENT_LEVEL, STARTING_INDEX, CURRENT_FOUND)
+       FOUND, STARTING_INDEX)
     INTEGER(KIND=INT64), INTENT(IN)                :: TREE_SIZE, LAYER
     INTEGER(KIND=INT64), INTENT(OUT), DIMENSION(:) :: INDICES
-    INTEGER(KIND=INT64), INTENT(OUT)               :: FOUND
-    ! Arguments not meant to be provided by the user, but passed in recursion.
-    INTEGER(KIND=INT64), INTENT(IN), OPTIONAL :: CURRENT_LEVEL, STARTING_INDEX
-    INTEGER(KIND=INT64), INTENT(IN), OPTIONAL :: CURRENT_FOUND
+    INTEGER(KIND=INT64), INTENT(INOUT)             :: FOUND
+    INTEGER(KIND=INT64), INTENT(IN), OPTIONAL :: STARTING_INDEX
     ! Local variables
-    INTEGER(KIND=INT64) :: SI, CL, TMID
-    ! Assign default value for 'CURRENT_LEVEL' and 'STARTING_INDEX'.
-    IF (PRESENT(CURRENT_LEVEL)) THEN
-       CL = CURRENT_LEVEL
+    INTEGER(KIND=INT64) :: SI, TMID
+    IF (PRESENT(STARTING_INDEX)) THEN
        SI = STARTING_INDEX
-       FOUND = CURRENT_FOUND
     ELSE
-       CL = 0
        SI = 1
-       FOUND = 0
     END IF
     ! Check stopping condition.
-    IF (CL .EQ. LAYER) THEN
+    IF (LAYER .EQ. 0) THEN
        ! Add this node to the list (if it is the right level.
        FOUND = FOUND + 1
        INDICES(FOUND) = SI
@@ -160,10 +153,10 @@ CONTAINS
        ! Continue by recursively adding the two children trees. Subtract
        ! one from TMID to account for the current root. Skip it in indices.
        MORE_LEVELS : IF (TMID > 1) THEN
-          CALL LEVEL(TMID-1, LAYER, INDICES, FOUND, CL+1, SI+1, FOUND)
+          CALL LEVEL(TMID-1, LAYER-1, INDICES, FOUND, SI+1)
           ! Check to see if another child exists in the tree, if so recurse.
           HAS_OUTER : IF (TMID .LT. TREE_SIZE) THEN
-             CALL LEVEL(TREE_SIZE-TMID, LAYER, INDICES, FOUND, CL+1, SI+TMID, FOUND)
+             CALL LEVEL(TREE_SIZE-TMID, LAYER-1, INDICES, FOUND, SI+TMID)
           END IF HAS_OUTER
        END IF MORE_LEVELS
     END IF
