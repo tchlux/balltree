@@ -138,18 +138,7 @@ class BallTree:
     # Given the data type of this class, setup which internal methods
     # are called (for the appropriate number sizes).
     def _set_type_internals(self):
-        # Declare the methods based on the dtype.
-        if ('int8' in str(self.ttype)):
-            if ('uint8' in str(self.ttype)):
-                import warnings
-                warnings.warn("This ball tree only handles signed integers. Make sure to subtract 128 from all provided values before using this code.")
-            self.sstype = np.int64
-            self._build_tree = ball_tree_i8.build_tree
-            self._fix_order  = ball_tree_i8.fix_order
-            self._bt_nearest = ball_tree_i8.nearest
-            # TODO: Need to write "approx nearest" function for I8.
-            self._bt_approx_nearest = lambda *args, **kwargs: print("ERROR: Unsupported operation.")
-        elif ('float64' in str(self.ttype)):
+        if ('float64' in str(self.ttype)):
             self.sstype = np.float64
             self._build_tree = ball_tree_r64.build_tree
             self._fix_order  = ball_tree_r64.fix_order
@@ -259,8 +248,8 @@ class BallTree:
 
     # Find the "k" nearest neighbors to all points in z.
     def nearest(self, z, k=1, leaf_size=None, return_distance=True,
-                transpose=True, max_search=None, look_ahead=None,
-                randomized=False):
+                transpose=True, max_search=None, approximate=False,
+                look_ahead=None, randomized=False):
         # Get the leaf size.
         if (leaf_size is None): leaf_size = self.leaf_size
         # If only a single point was given, convert it to a matrix.
@@ -275,7 +264,7 @@ class BallTree:
         dists   = np.ones((k, points.shape[1]), order='F', dtype='float64')
         order = self._get_order(search=True)
         # Compute the nearest neighbors.
-        if look_ahead is None:
+        if (not approximate) and (look_ahead is None):
             self._bt_nearest(points, k, self.tree, self.sq_sums, self.radii,
                              order, leaf_size, indices, dists,
                              to_search=max_search)

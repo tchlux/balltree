@@ -21,11 +21,11 @@ if COMPARE_AGAINST_SKLEARN:
     from util.system import Timer
     t = Timer()
 
-    if LARGE_TEST: train, dim = 100000, 100
+    if LARGE_TEST: train, dim = 1000000, 100
     else:          train, dim = 7, 2
     test = 1
     leaf_size = 10
-    k = 1
+    k = 5
     print("Initializing data..", flush=True)
     np.random.seed(0)
     x = np.random.random(size=(train,dim))
@@ -43,9 +43,7 @@ if COMPARE_AGAINST_SKLEARN:
     ct = t.stop()
     print("Construction time:", ct)
     t.start()
-    # TODO: Approximate nearest doesn't work for K > 1, and it doesn't
-    #       record the distances measured while doing look aheads.
-    d, i = tree.query(z, k=k) #, look_ahead=4, randomized=True)
+    d, i = tree.query(z, k=k)
     qt = t.stop()
     print("Query time:       ", qt)
     print("d: ",d[0])

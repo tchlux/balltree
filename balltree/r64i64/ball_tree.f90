@@ -301,10 +301,9 @@ CONTAINS
     INTEGER(KIND=INT64), DIMENSION(:), ALLOCATABLE :: INDS_BUFFER
     REAL(KIND=REAL64),   DIMENSION(:), ALLOCATABLE :: DISTS_BUFFER
     IF (PRESENT(LOOK_AHEAD)) THEN ; LH = LOOK_AHEAD
-    ELSE ; LH = 3 ; END IF
+    ELSE ; LH = MIN(5, CEILING(LOG(REAL(SIZE(ORDER))) / LOG(2.0))) ; END IF
     IF (PRESENT(RANDOMIZED)) THEN ; RANDOM_TRAVERSAL = RANDOMIZED
     ELSE ; RANDOM_TRAVERSAL = .FALSE. ; END IF
-    ! END IF
     ! Allocate the buffers for holding the nearest indices and distances.
     ALLOCATE( INDS_BUFFER(1:K+2**LH), DISTS_BUFFER(1:K+2**LH) )
     ! For each point in this set, use the recursive branching
@@ -384,12 +383,23 @@ CONTAINS
           DO I = 1, I1
              LEVEL_DISTS(I) = SQRT(PS + SQ_SUMS(ORDER(LEVEL_INDS(I))) - &
                   2*DOT_PRODUCT(POINT(:),TREE(:,ORDER(LEVEL_INDS(I)))))
+             ! Store this measured distance.
+             F = F + 1
+             INDICES(F) = ORDER(LEVEL_INDS(I))
+             DISTS(F) = LEVEL_DISTS(I)
           END DO
           ! Measure distance to all outer children.
           DO I = LMID+1, LMID+I2
              LEVEL_DISTS(I) = SQRT(PS + SQ_SUMS(ORDER(LEVEL_INDS(I))) - &
                   2*DOT_PRODUCT(POINT(:),TREE(:,ORDER(LEVEL_INDS(I)))))
+             ! Store this measured distance.
+             F = F + 1
+             INDICES(F) = ORDER(LEVEL_INDS(I))
+             DISTS(F) = LEVEL_DISTS(I)
           END DO
+          ! Reduce the kept points to only those that are closest.
+          CALL ARGSELECT_R64(DISTS(:F), INDICES(:F), MIN(K,F))
+          F = MIN(K, F)
           ! Compute the probability that the inner (left) is less than the outer (right).
           CALL PROBABILITY_LESS_THAN(LEVEL_DISTS(1:I1), LEVEL_DISTS(LMID+1:LMID+I2), D1)
           ! Compute the probability that the outer (right) is less than the inner (left).
@@ -410,11 +420,11 @@ CONTAINS
           ! Traverse inner (left).
           IF (D1 .GE. D2) THEN
              CALL PT_APPROX_NEAREST(POINT, K, TREE, SQ_SUMS, RADII, ORDER(2:MID), &
-                  LEAF_SIZE, INDICES, DISTS, LOOK_AHEAD, FOUND, PT_SS, RANDOM_TRAVERSAL)
+                  LEAF_SIZE, INDICES, DISTS, LOOK_AHEAD, F, PS, RANDOM_TRAVERSAL)
           ! Traverse outer (right).
           ELSE
              CALL PT_APPROX_NEAREST(POINT, K, TREE, SQ_SUMS, RADII, ORDER(MID+1:), &
-                  LEAF_SIZE, INDICES, DISTS, LOOK_AHEAD, FOUND, PT_SS, RANDOM_TRAVERSAL)
+                  LEAF_SIZE, INDICES, DISTS, LOOK_AHEAD, F, PS, RANDOM_TRAVERSAL)
           END IF
        ELSE
           ! This is a leaf, distances need to be measured to all the
@@ -441,7 +451,7 @@ CONTAINS
     SORT_K : IF (PRESENT(FOUND)) THEN
        ! This is not the root, we need to pass the updated value of
        ! FOUND back up the recrusion stack.
-       FOUND  = F
+       FOUND = F
     ELSE
        ! This is the root, initial caller. Sort the distances for return.
        CALL ARGSELECT_R64(DISTS(:F), INDICES(:F), K)

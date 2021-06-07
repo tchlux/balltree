@@ -2,6 +2,23 @@
 # TODO: Add indexing scheme (after building the tree? links through layers?)
 # TODO: Add a search that takes advantage of indexing.
 
+# --------------------------------------------------------------------
+#          DECLARING DIFFERENT TYPE BACK ENDS FOR BALL TREE
+# 
+# # Declare the methods based on the dtype.
+# if ('int8' in str(self.ttype)):
+#     if ('uint8' in str(self.ttype)):
+#         import warnings
+#         warnings.warn("This ball tree only handles signed integers. Make sure to subtract 128 from all provided values before using this code.")
+#     self.sstype = np.int64
+#     self._build_tree = ball_tree_i8.build_tree
+#     self._fix_order  = ball_tree_i8.fix_order
+#     self._bt_nearest = ball_tree_i8.nearest
+#     # TODO: Need to write "approx nearest" function for I8.
+#     self._bt_approx_nearest = lambda *args, **kwargs: print("ERROR: Unsupported operation.")
+# --------------------------------------------------------------------
+
+
 # --------------------------------------------------------------------------
 # Alternative partitioning strategies tested, not better enough to merit use
 #  N = 100k
@@ -42,3 +59,4 @@
 #         LEAF_SIZE, INDICES, DISTS, LOOK_AHEAD, FOUND, PT_SS, RANDOM_TRAVERSAL)
 # END IF
 # -----------------------------------------------------------------------------
+
