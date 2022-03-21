@@ -1,7 +1,7 @@
 MODULE BALL_TREE_R64
   USE ISO_FORTRAN_ENV, ONLY: REAL64, INT64
   USE PRUNE,       ONLY: LEVEL
-  USE SWAP,        ONLY: SWAP_I64
+  USE SWAP,        ONLY: SWAP_R64, SWAP_I64
   USE FAST_SELECT, ONLY: ARGSELECT_R64
   USE FAST_SORT,   ONLY: ARGSORT
   IMPLICIT NONE
@@ -75,7 +75,7 @@ CONTAINS
 
     ! Base case for recursion, once we have few enough points, exit.
     IF (SIZE(ORDER) .LE. LS) THEN
-       RADII(ORDER(1)) = SQRT(MAXVAL(SQ_DISTS))
+       RADII(ORDER(1)) = SQRT(MAXVAL(SQ_DISTS,1))
        IF (SIZE(ORDER) .GT. 1) RADII(ORDER(2:)) = 0.0_REAL64
        RETURN
     ELSE IF (SIZE(ORDER) .EQ. 2) THEN
@@ -133,27 +133,22 @@ CONTAINS
     INTEGER(KIND=INT64), INTENT(IN),  OPTIONAL    :: TO_SEARCH
     ! Local variables.
     INTEGER(KIND=INT64) :: I, B, BUDGET
-    INTEGER(KIND=INT64), DIMENSION(K+LEAF_SIZE+2) :: INDS_BUFFER
-    REAL(KIND=REAL64),   DIMENSION(K+LEAF_SIZE+2) :: DISTS_BUFFER
     IF (PRESENT(TO_SEARCH)) THEN ; BUDGET = MAX(K, TO_SEARCH)
-    ELSE ; BUDGET = SIZE(ORDER) ; END IF
+    ELSE                         ; BUDGET = SIZE(ORDER)       ; END IF
     ! For each point in this set, use the recursive branching
     ! algorithm to identify the nearest elements of TREE.
-    !$OMP PARALLEL DO PRIVATE(INDS_BUFFER, DISTS_BUFFER, B)
+    !$OMP PARALLEL DO PRIVATE(B)
     DO I = 1, SIZE(POINTS,2)
        B = BUDGET
        CALL PT_NEAREST(POINTS(:,I), K, TREE, SQ_SUMS, RADII, ORDER, &
-            LEAF_SIZE, INDS_BUFFER, DISTS_BUFFER, B)
-       ! Sort the first K elements of the temporary arry for return.
-       INDICES(:,I) = INDS_BUFFER(:K)
-       DISTS(:,I) = DISTS_BUFFER(:K)
+            LEAF_SIZE, INDICES(:,I), DISTS(:,I), B)
     END DO
     !$OMP END PARALLEL DO
   END SUBROUTINE NEAREST
 
   ! Compute the K nearest elements of TREE to each point in POINTS.
-  RECURSIVE SUBROUTINE PT_NEAREST(POINT, K, TREE, SQ_SUMS, RADII, &
-       ORDER, LEAF_SIZE, INDICES, DISTS, CHECKS, FOUND, PT_SS)
+  SUBROUTINE PT_NEAREST(POINT, K, TREE, SQ_SUMS, RADII, &
+       ORDER, LEAF_SIZE, INDICES, DISTS, CHECKS)
     REAL(KIND=REAL64), INTENT(IN), DIMENSION(:)   :: POINT
     REAL(KIND=REAL64), INTENT(IN), DIMENSION(:,:) :: TREE
     REAL(KIND=REAL64), INTENT(IN), DIMENSION(:)   :: SQ_SUMS
@@ -163,125 +158,257 @@ CONTAINS
     INTEGER(KIND=INT64), INTENT(OUT), DIMENSION(:) :: INDICES
     REAL(KIND=REAL64),   INTENT(OUT), DIMENSION(:) :: DISTS
     INTEGER(KIND=INT64), INTENT(INOUT), OPTIONAL   :: CHECKS
-    INTEGER(KIND=INT64), INTENT(INOUT), OPTIONAL   :: FOUND
-    REAL(KIND=REAL64),   INTENT(IN),    OPTIONAL   :: PT_SS
     ! Local variables
-    INTEGER(KIND=INT64) :: F, I, I1, I2, MID, ALLOWED_CHECKS
-    REAL(KIND=REAL64)   :: D, D1, D2
-    REAL(KIND=REAL64)   :: PS
-    ! Initialize FOUND for first call, if FOUND is present then
-    ! this must not be first and all are present.
-    INITIALIZE : IF (PRESENT(FOUND)) THEN
+    INTEGER(KIND=INT64), DIMENSION(SIZE(ORDER)/2) :: MEASURED_INDS
+    INTEGER(KIND=INT64), DIMENSION(SIZE(ORDER)/2) :: MEASURED_SIZES
+    REAL(KIND=REAL64), DIMENSION(SIZE(ORDER)/2) :: NEGATED_LOWERS
+    REAL(KIND=REAL64), DIMENSION(SIZE(ORDER)/2) :: MEASURED_LOWERS
+    INTEGER(KIND=INT64) :: I, S, I1, I2, MID
+    INTEGER(KIND=INT64) :: ALLOWED_CHECKS, NEXT_BEST, NUM_MEASURED
+    REAL(KIND=REAL64)   :: D, D1, D2, PS
+    ! Set the default value for the number of allowed distance calculations.
+    IF (PRESENT(CHECKS)) THEN
        ALLOWED_CHECKS = CHECKS
-       IF (ALLOWED_CHECKS .LE. 0) RETURN
-       F = FOUND
-       PS = PT_SS
     ELSE
-       ! Initialize the remaining checks to search.
-       IF (PRESENT(CHECKS)) THEN ; ALLOWED_CHECKS = CHECKS - 1
-       ELSE ; ALLOWED_CHECKS = SIZE(ORDER) - 1 ; END IF
-       ! Start at index 0 (added onto current index). Compute squared sum.
-       PS = SUM(POINT(:)**2)
-       ! Measure distance to root.
-       INDICES(1) = ORDER(1)
-       DISTS(1) = SQRT(PS + SQ_SUMS(ORDER(1)) - &
-            2*DOT_PRODUCT(POINT(:), TREE(:,ORDER(1))))
-       ! Set the "points found" to be 1.
-       F = 1
-    END IF INITIALIZE
-    ! If this is NOT a leaf node, then recurse.
-    BRANCH_OR_LEAF : IF (SIZE(ORDER) .GT. LEAF_SIZE) THEN
-       ALLOWED_CHECKS = ALLOWED_CHECKS - 1
-       ! Measure distance to inner child.
-       I1 = ORDER(2)
-       D1 = SQRT(PS + SQ_SUMS(I1) - &
-            2*DOT_PRODUCT(POINT(:),TREE(:,I1)))
-       ! Store this distance calculation and index.
-       F = F + 1
-       INDICES(F) = I1
-       DISTS(F) = D1
-       ! Measure distance to outer child the same as above, after
-       ! checking to see if there *is* an outer child.
-       MID = (SIZE(ORDER) + 2) / 2
-       IF (MID+1 > SIZE(ORDER)) THEN
-          I2 = 0
-          D2 = HUGE(D2)
-       ELSE
-          I2 = ORDER(MID+1)
-          IF (I2 .NE. I1) THEN
+       ALLOWED_CHECKS = SIZE(ORDER)
+    END IF
+    ! Initialize the indices and distances to all be "null" values.
+    INDICES(:) = 0
+    DISTS(:) = HUGE(DISTS(1))
+    ! Initialize the MEASURED_* arrays for tracking a heap of
+    !  subtrees that need to be searched for the nearest neighbors.
+    NUM_MEASURED = 0
+    MEASURED_INDS(:) = 0
+    MEASURED_SIZES(:) = 0
+    MEASURED_LOWERS(:) = HUGE(MEASURED_LOWERS(1))
+    ! Compute the square sum of the search point
+    !  (to accelerate later distance calculations).
+    PS = SUM(POINT(:)**2)
+    ! Measure the distance to the root node and store it.
+    I = ORDER(1)
+    D = SQRT(PS + SQ_SUMS(I) - &
+         2*DOT_PRODUCT(POINT(:), TREE(:,I)))
+    CALL INSERT_MAX(I, D)
+    ALLOWED_CHECKS = ALLOWED_CHECKS - 1
+    ! Store the statistics about the root node.
+    I = 1; S = SIZE(ORDER); CALL INSERT_MIN(I, S, D)
+    ! Loop until there are no more potential avenues to descend.
+    SEARCH_TREE : DO WHILE (NUM_MEASURED .GT. 0)
+       ! Get the next best subtree to check.
+       CALL POP_MIN(I, S, D)
+       ! If the lower bound for the nearest point in this subtree is
+       !  greater than the furthest point found so far, skip this tree.
+       IF (D .GE. DISTS(1)) CYCLE SEARCH_TREE
+       ! Measure distance to all children if the next best is a leaf.
+       IF (S .LE. LEAF_SIZE) THEN
+          I1 = I + 1
+          I2 = I + S - 1
+          DIST_TO_CHILDREN : DO I = I1, I2
+             ! Measure distance to all children of this node.
+             D = SQRT(PS + SQ_SUMS(ORDER(I)) - &
+                  2*DOT_PRODUCT(POINT(:),TREE(:,ORDER(I))))
+             ! Store this distance.
+             CALL INSERT_MAX(ORDER(I), D)
              ALLOWED_CHECKS = ALLOWED_CHECKS - 1
+             IF (ALLOWED_CHECKS .LE. 0) EXIT SEARCH_TREE
+          END DO DIST_TO_CHILDREN
+       ! Measure distance to the two children and compute bounds.
+       ELSE
+          ! Measure the distance to the two children and compute the
+          !  bounds for nearest possible distance to their descendants.
+          I = I + 1 ! <- Get inner child index given root index.
+          ! Compute the index of the last point that belongs to the
+          !  inner child (and the size of the current set of points).
+          MID = (S + 2) / 2
+          ! Measure distance to inner child and store.
+          I1 = ORDER(I)
+          D1 = SQRT(PS + SQ_SUMS(I1) - &
+               2*DOT_PRODUCT(POINT(:),TREE(:,I1)))
+          CALL INSERT_MAX(I1, D1)
+          ALLOWED_CHECKS = ALLOWED_CHECKS - 1
+          IF (ALLOWED_CHECKS .LE. 0) EXIT SEARCH_TREE
+          ! For subtrees that "contain" the search point, encode the
+          !  distance to the root in the distance lower bound.
+          IF (D1 .LT. RADII(I1)) THEN
+             D1 = -1.0_REAL64 / (1.0_REAL64 + D1)
+          ELSE
+             D1 = D1 - RADII(I1)
+          END IF
+          ! Store the descriptive variables for the inner child lower bound.
+          IF (D1 .LT. DISTS(1)) CALL INSERT_MIN(I, MID-1, D1)
+          ! Check to see if there actually is an outer child.
+          IF (MID+1 .LE. S) THEN
+             I = I + MID - 1 ! <- the index immediately after MID
+             ! Measure distance to outer child and store.
+             I2 = ORDER(I)
              D2 = SQRT(PS + SQ_SUMS(I2) - &
                   2*DOT_PRODUCT(POINT(:),TREE(:,I2)))
-             ! Store this distance calculation and index.
-             F = F + 1
-             INDICES(F) = I2
-             DISTS(F) = D2
-          ELSE ; D2 = HUGE(D2)
+             CALL INSERT_MAX(I2, D2)
+             ALLOWED_CHECKS = ALLOWED_CHECKS - 1
+             IF (ALLOWED_CHECKS .LE. 0) EXIT SEARCH_TREE
+             ! For subtrees that "contain" the search point, encode the
+             !  distance to the root in the measurement.
+             IF (D2 .LT. RADII(I2)) THEN
+                D2 = -1.0_REAL64 / (1.0_REAL64 + D2)
+             ELSE
+                D2 = D2 - RADII(I2)
+             END IF
+             ! Store the descriptive variables for the outer child.
+             IF (D2 .LT. DISTS(1)) CALL INSERT_MIN(I, S-MID, D2)
           END IF
        END IF
-       ! Re-organize the list of closest points, pushing them to first K spots.
-       CALL ARGSELECT_R64(DISTS(:F), INDICES(:F), MIN(K,F))
-       F = MIN(K,F)
-       ! Store the maximum distance.
-       D = MAXVAL(DISTS(:F),1)
-       ! Determine which child to search (depth-first search) based
-       ! on which child region the point lands in from the root.
-       INNER_CHILD_CLOSER : IF (D1 .LE. D2) THEN
-          ! Search the inner child if it could contain a nearer point.
-          SEARCH_INNER1 : IF ((F .LT. K) .OR. (D .GT. D1 - RADII(I1))) THEN
-             CALL PT_NEAREST(POINT, K, TREE, SQ_SUMS, RADII, ORDER(2:MID), &
-                  LEAF_SIZE, INDICES, DISTS, ALLOWED_CHECKS, F, PS)
-          END IF SEARCH_INNER1
-          ! Search the outer child if it could contain a nearer point.
-          SEARCH_OUTER1 : IF (((F .LT. K) .OR. (D .GT. D2 - RADII(I2))) &
-               .AND. (I2 .NE. I1) .AND. (I2 .GT. 0)) THEN
-             CALL PT_NEAREST(POINT, K, TREE, SQ_SUMS, RADII, ORDER(MID+1:), &
-                  LEAF_SIZE, INDICES, DISTS, ALLOWED_CHECKS, F, PS)
-          END IF SEARCH_OUTER1
-       ELSE
-          ! Search the outer child if it could contain a nearer point.
-          SEARCH_OUTER2 : IF (((F .LT. K) .OR. (D .GT. D2 - RADII(I2))) &
-               .AND. (I2 .NE. I1) .AND. (I2 .GT. 0)) THEN
-             CALL PT_NEAREST(POINT, K, TREE, SQ_SUMS, RADII, ORDER(MID+1:), &
-                  LEAF_SIZE, INDICES, DISTS, ALLOWED_CHECKS, F, PS)
-          END IF SEARCH_OUTER2
-          ! Search the inner child if it could contain a nearer point.
-          SEARCH_INNER2 : IF ((F .LT. K) .OR. (D .GT. D1 - RADII(I1))) THEN
-             CALL PT_NEAREST(POINT, K, TREE, SQ_SUMS, RADII, ORDER(2:MID), &
-                  LEAF_SIZE, INDICES, DISTS, ALLOWED_CHECKS, F, PS)
-          END IF SEARCH_INNER2
-       END IF INNER_CHILD_CLOSER
-    ! Since this is a leaf node, we measure distance to all children.
-    ELSE
-       DIST_TO_CHILDREN : DO I = 2, SIZE(ORDER)
-          IF (ALLOWED_CHECKS .LE. 0) EXIT DIST_TO_CHILDREN
-          ALLOWED_CHECKS = ALLOWED_CHECKS - 1
-          ! Measure distance to all children of this node.
-          D = SQRT(PS + SQ_SUMS(ORDER(I)) - &
-               2*DOT_PRODUCT(POINT(:),TREE(:,ORDER(I))))
-          ! Store this distance.
-          F = F + 1
-          DISTS(F) = D
-          INDICES(F) = ORDER(I)
-       END DO DIST_TO_CHILDREN
-       ! Reduce the kept points to only those that are closest.
-       CALL ARGSELECT_R64(DISTS(:F), INDICES(:F), MIN(K,F))
-       F = MIN(K, F)
-    END IF BRANCH_OR_LEAF
+    END DO SEARCH_TREE
+    ! Sort the distances for return (they were in a heap before).
+    CALL ARGSORT(DISTS(:), INDICES(:))
 
-    ! Handle closing operations..
-    SORT_K : IF (PRESENT(FOUND)) THEN
-       ! This is not the root, we need to pass the updated value of
-       ! FOUND back up the recrusion stack.
-       FOUND = F
-       CHECKS = ALLOWED_CHECKS
-    ELSE
-       ! This is the root, initial caller. Sort the distances for return.
-       CALL ARGSELECT_R64(DISTS(:F), INDICES(:F), K)
-       CALL ARGSORT(DISTS(:K), INDICES(:K))
-    END IF SORT_K
+  CONTAINS
+
+    ! Insert a new element into a min-heap.
+    SUBROUTINE INSERT_MIN(INDEX, SUBTREE_SIZE, LOWER)
+      INTEGER(KIND=INT64), INTENT(IN) :: INDEX, SUBTREE_SIZE
+      REAL(KIND=REAL64),   INTENT(IN) :: LOWER
+      ! Temparary index.
+      INTEGER(KIND=INT64) :: I, IP
+      ! Insert at the end.
+      NUM_MEASURED = NUM_MEASURED + 1
+      MEASURED_INDS(NUM_MEASURED) = INDEX
+      MEASURED_SIZES(NUM_MEASURED) = SUBTREE_SIZE
+      MEASURED_LOWERS(NUM_MEASURED) = LOWER
+      ! Compare upwards to maintain HEAP property.
+      I = NUM_MEASURED
+      CHECK_MIN_HEAP : DO
+         IP = I / 2
+         IF (IP .LT. 1) THEN
+            EXIT CHECK_MIN_HEAP            
+         ELSE IF (MEASURED_LOWERS(IP) .LE. LOWER) THEN
+            EXIT CHECK_MIN_HEAP
+         ELSE
+            CALL SWAP_I64(MEASURED_INDS(IP), MEASURED_INDS(I))
+            CALL SWAP_I64(MEASURED_SIZES(IP), MEASURED_SIZES(I))
+            CALL SWAP_R64(MEASURED_LOWERS(IP), MEASURED_LOWERS(I))
+            I = IP
+         END IF
+      END DO CHECK_MIN_HEAP
+    END SUBROUTINE INSERT_MIN
+
+    ! Pop the root from a min-heap.
+    SUBROUTINE POP_MIN(INDEX, SUBTREE_SIZE, LOWER)
+      INTEGER(KIND=INT64), INTENT(OUT) :: INDEX, SUBTREE_SIZE
+      REAL(KIND=REAL64),   INTENT(OUT) :: LOWER
+      ! Temporary index.
+      INTEGER(KIND=INT64) :: I, I1, I2
+      ! Get the minimum element.
+      INDEX = MEASURED_INDS(1)
+      SUBTREE_SIZE = MEASURED_SIZES(1)
+      LOWER = MEASURED_LOWERS(1)
+      ! Swap the last element to the root.
+      CALL SWAP_I64(MEASURED_INDS(1), MEASURED_INDS(NUM_MEASURED))
+      CALL SWAP_I64(MEASURED_SIZES(1), MEASURED_SIZES(NUM_MEASURED))
+      CALL SWAP_R64(MEASURED_LOWERS(1), MEASURED_LOWERS(NUM_MEASURED))
+      MEASURED_INDS(NUM_MEASURED) = 0
+      MEASURED_SIZES(NUM_MEASURED) = -1
+      MEASURED_LOWERS(NUM_MEASURED) = 0.0
+      NUM_MEASURED = NUM_MEASURED - 1
+      ! Comparex downwards to maintain HEAP property.
+      I = 1
+      CHECK_MIN_HEAP : DO
+         ! Get the index ofthe smaller child into I1.
+         I1 = 2*I
+         I2 = I1 + 1
+         IF (I1 .GT. NUM_MEASURED) THEN
+            EXIT CHECK_MIN_HEAP
+         ELSE IF (I2 .GT. NUM_MEASURED) THEN
+            CONTINUE
+         ELSE IF (MEASURED_LOWERS(I2) .LT. MEASURED_LOWERS(I1)) THEN
+            I1 = I2
+         END IF
+         ! Swap down if the smaller child is less than the current.
+         IF (MEASURED_LOWERS(I1) .LT. MEASURED_LOWERS(I)) THEN
+            CALL SWAP_I64(MEASURED_INDS(I1), MEASURED_INDS(I))
+            CALL SWAP_I64(MEASURED_SIZES(I1), MEASURED_SIZES(I))
+            CALL SWAP_R64(MEASURED_LOWERS(I1), MEASURED_LOWERS(I))
+            I = I1
+         ELSE
+            EXIT CHECK_MIN_HEAP
+         END IF
+      END DO CHECK_MIN_HEAP
+    END SUBROUTINE POP_MIN
+
+    ! Insert a new element into a min-heap.
+    SUBROUTINE INSERT_MAX(INDEX, DISTANCE)
+      INTEGER(KIND=INT64), INTENT(IN) :: INDEX
+      REAL(KIND=REAL64),   INTENT(IN) :: DISTANCE
+      INTEGER(KIND=INT64) :: I, IP, I1, I2
+      ! Do not add the new point if its distance is greater.
+      IF (DISTANCE .GE. DISTS(1)) RETURN
+      ! Otherwise, replace the existing max with the new value.
+      INDICES(1) = INDEX
+      DISTS(1) = DISTANCE
+      ! Comparex downwards to maintain HEAP property.
+      I = 1
+      CHECK_MAX_HEAP_AFTER_REMOVE : DO
+         ! Get the index ofthe smaller child into I1.
+         I1 = 2*I
+         I2 = I1 + 1
+         IF (I1 .GT. K) THEN
+            EXIT CHECK_MAX_HEAP_AFTER_REMOVE
+         ELSE IF (I2 .GT. K) THEN
+            I1 = I2
+         ELSE IF (DISTS(I2) .GT. DISTS(I1)) THEN
+            I1 = I2
+         END IF
+         ! Swap down if the larger child is greater than the current.
+         IF (DISTS(I1) .GT. DISTS(I)) THEN
+            CALL SWAP_I64(INDICES(I1), INDICES(I))
+            CALL SWAP_R64(DISTS(I1), DISTS(I))
+            I = I1
+         ELSE
+            EXIT CHECK_MAX_HEAP_AFTER_REMOVE
+         END IF
+      END DO CHECK_MAX_HEAP_AFTER_REMOVE
+    END SUBROUTINE INSERT_MAX
+
   END SUBROUTINE PT_NEAREST
 
+
+  ! Re-organize a built tree so that it is more usefully packed in memory.
+  SUBROUTINE FIX_ORDER(POINTS, SQ_SUMS, RADII, ORDER, COPY)
+    REAL(KIND=REAL64),   INTENT(INOUT), DIMENSION(:,:) :: POINTS
+    REAL(KIND=REAL64),   INTENT(OUT),   DIMENSION(:)   :: SQ_SUMS
+    REAL(KIND=REAL64),   INTENT(OUT),   DIMENSION(:)   :: RADII
+    INTEGER(KIND=INT64), INTENT(INOUT), DIMENSION(:)   :: ORDER
+    LOGICAL, INTENT(IN), OPTIONAL :: COPY
+    LOGICAL :: SHOULD_COPY
+    INTEGER(KIND=INT64) :: I
+    ! Default to copy (in memory) if there is less than 1 GB of data.
+    IF (PRESENT(COPY)) THEN ; SHOULD_COPY = COPY
+    ELSE ; SHOULD_COPY = SIZEOF(POINTS) .LE. MAX_COPY_BYTES
+    END IF
+    ! Reorder all of the data. Use a scratch file for large data sets.
+    IF (SHOULD_COPY) THEN
+       POINTS(:,:) = POINTS(:,ORDER)
+    ELSE
+       ! Open scratch file for writing all of the points in order.
+       OPEN(UNIT=1, STATUS='SCRATCH', ACTION='READWRITE', FORM='UNFORMATTED', ACCESS='STREAM')
+       ! Write all points to a scratch file in the correct order.
+       DO I = 1, SIZE(ORDER)
+          WRITE(UNIT=1) POINTS(:,ORDER(I))
+       END DO
+       ! Read all points from file (they are now ordered correctly).
+       READ(UNIT=1,POS=1) POINTS(:,:)
+       ! Close scratch file.
+       CLOSE(UNIT=1)
+    END IF
+    ! Always copy the square sums and the radii in memory (shouldn't be bad).
+    SQ_SUMS(:) = SQ_SUMS(ORDER)
+    RADII(:) = RADII(ORDER)
+    ! Reset the order because now it is the expected format.
+    FORALL (I=1:SIZE(ORDER)) ORDER(I) = I
+  END SUBROUTINE FIX_ORDER
+
+  ! ------------------------------------------------------------------
+  !               APPROXIMATE NEAREST NEIGHBOR LOOKUP
+  ! ------------------------------------------------------------------
 
   ! Compute the K nearest elements of TREE to each point in POINTS.
   SUBROUTINE APPROX_NEAREST(POINTS, K, TREE, SQ_SUMS, RADII, ORDER, &
@@ -522,54 +649,7 @@ CONTAINS
          END IF
       END DO binary_search
     END SUBROUTINE FIRST_GREATER_OR_EQUAL
-
   END SUBROUTINE PROBABILITY_LESS_THAN
 
-  ! Re-organize a built tree so that it is more usefully packed in memory.
-  SUBROUTINE FIX_ORDER(POINTS, SQ_SUMS, RADII, ORDER, COPY)
-    REAL(KIND=REAL64),   INTENT(INOUT), DIMENSION(:,:) :: POINTS
-    REAL(KIND=REAL64),   INTENT(OUT),   DIMENSION(:)   :: SQ_SUMS
-    REAL(KIND=REAL64),   INTENT(OUT),   DIMENSION(:)   :: RADII
-    INTEGER(KIND=INT64), INTENT(INOUT), DIMENSION(:)   :: ORDER
-    LOGICAL, INTENT(IN), OPTIONAL :: COPY
-    LOGICAL :: SHOULD_COPY
-    INTEGER(KIND=INT64) :: I
-    ! Default to copy (in memory) if there is less than 1 GB of data.
-    IF (PRESENT(COPY)) THEN ; SHOULD_COPY = COPY
-    ELSE ; SHOULD_COPY = SIZEOF(POINTS) .LE. MAX_COPY_BYTES
-    END IF
-    ! Reorder all of the data. Use a scratch file for large data sets.
-    IF (SHOULD_COPY) THEN
-       POINTS(:,:) = POINTS(:,ORDER)
-    ELSE
-       ! Open scratch file for writing all of the points in order.
-       OPEN(UNIT=1, STATUS='SCRATCH', ACTION='READWRITE', FORM='UNFORMATTED', ACCESS='STREAM')
-       ! Write all points to a scratch file in the correct order.
-       DO I = 1, SIZE(ORDER)
-          WRITE(UNIT=1) POINTS(:,ORDER(I))
-       END DO
-       ! Read all points from file (they are now ordered correctly).
-       READ(UNIT=1,POS=1) POINTS(:,:)
-       ! Close scratch file.
-       CLOSE(UNIT=1)
-    END IF
-    ! Always copy the square sums and the radii in memory (shouldn't be bad).
-    SQ_SUMS(:) = SQ_SUMS(ORDER)
-    RADII(:) = RADII(ORDER)
-    ! Reset the order because now it is the expected format.
-    FORALL (I=1:SIZE(ORDER)) ORDER(I) = I
-  END SUBROUTINE FIX_ORDER
 
 END MODULE BALL_TREE_R64
-
-
-!2021-06-06 12:10:09
-!
-          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-          ! PRINT *, ''                                                !
-          ! PRINT *, 'LOOK_AHEAD         ', LOOK_AHEAD                 !
-          ! PRINT *, 'LMID:              ', LMID                       !
-          ! PRINT *, 'LEVEL_INDS(:)      ', LEVEL_INDS(:)              !
-          ! PRINT *, 'LEVEL_INDS(:LMID)  ', LEVEL_INDS(:I1)            !
-          ! PRINT *, 'LEVEL_INDS(LMID+1:)', LEVEL_INDS(LMID+1:LMID+I2) !
-          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!

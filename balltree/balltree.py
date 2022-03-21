@@ -1,15 +1,19 @@
 # Ball Tree wrapper for Fortran module.
 
+# TODO: Searching should brute-force the un-built part of the tree.
+# TODO: Internal types should be used instead of `if str('float64')...`
+# TODO: Refactor Fortran to use a `types.f90` file that specifies precision.
+# 
 # TODO: Add another operation mode for a 'byte' tree.
-# TODO: Mix test cases for different type trees, make one testing suite.
 # TODO: If data is 'uint8' then add 128 to the values before building tree.
-# TODO: Add code for incrementally adding points to the tree
 
 import os 
 import fmodpy
 import numpy as np
 
+
 PATH_TO_HERE = os.path.dirname(os.path.abspath(__file__))
+
 
 # Allow OpenMP to create nested threads.
 from multiprocessing import cpu_count
@@ -21,23 +25,31 @@ if "OMP_MAX_ACTIVE_LEVELS" not in os.environ:
 if "OMP_NESTED" not in os.environ:
     os.environ["OMP_NESTED"] = "TRUE"
 
+
 # Define paths to the Fortran utilities.
 R64_DIR = os.path.join(PATH_TO_HERE, "r64i64")
+R32_DIR = os.path.join(PATH_TO_HERE, "r32i32")
 PATH_TO_BT_R64 = os.path.join(R64_DIR, "ball_tree.f90")
+PATH_TO_BT_R32 = os.path.join(R32_DIR, "ball_tree.f90")
 PATH_TO_PRUNE = os.path.join(R64_DIR, "prune.f90")
 PATH_TO_SORT   = os.path.join(R64_DIR, "fast_sort.f90")
 PATH_TO_SELECT = os.path.join(R64_DIR, "fast_select.f90")
-# PATH_TO_BT_I8 = os.path.join(PATH_TO_HERE, "ball_tree_i8.f90")
+
 
 # Import the Fortran utilities.
-dependencies = ["swap.f90", "prune.f90", "fast_select.f90", "fast_sort.f90", "ball_tree.f90"]
-ball_tree_r64  = fmodpy.fimport(PATH_TO_BT_R64, output_dir=R64_DIR, omp=True,
+dependencies = ["swap.f90", "prune.f90", "fast_select.f90",
+                "fast_sort.f90", "ball_tree.f90"]
+
+ball_tree_r64  = fmodpy.fimport(PATH_TO_BT_R64, name="ball_tree_64", output_dir=R64_DIR, omp=True,
                                 verbose=False, depends_files=dependencies,
                                 autocompile=True).ball_tree_r64
+ball_tree_r32  = fmodpy.fimport(PATH_TO_BT_R32, name="ball_tree_32", output_dir=R32_DIR, omp=True,
+                                verbose=False, depends_files=dependencies,
+                                autocompile=True).ball_tree_r32
 prune = fmodpy.fimport(PATH_TO_PRUNE, output_dir=R64_DIR, verbose=False).prune
 fast_sort = fmodpy.fimport(PATH_TO_SORT, output_dir=R64_DIR, verbose=False).fast_sort
 fast_select = fmodpy.fimport(PATH_TO_SELECT, output_dir=R64_DIR, verbose=False).fast_select
-# ball_tree_i8  = fmodpy.fimport(PATH_TO_BT_I8, output_dir=PATH_TO_HERE, omp=True)
+
 
 # ------------------------------------------------------------------
 #                        FastSort method
@@ -144,9 +156,15 @@ class BallTree:
             self._fix_order  = ball_tree_r64.fix_order
             self._bt_nearest = ball_tree_r64.nearest
             self._bt_approx_nearest = ball_tree_r64.approx_nearest
+        elif ('float32' in str(self.ttype)):
+            self.sstype = np.float32
+            self._build_tree = ball_tree_r32.build_tree
+            self._fix_order  = ball_tree_r32.fix_order
+            self._bt_nearest = ball_tree_r32.nearest
+            self._bt_approx_nearest = ball_tree_r64.approx_nearest
         else:
             class UnsupportedType(Exception): pass
-            raise(UnsupportedType(f"The type '{dtype.name}' is not supported."))
+            raise(UnsupportedType(f"The type '{str(self.ttype)}' is not supported."))
 
     # Based on the size and 'built' amount and the 'size' internal: if
     # searching, return 'built' portion of tree; if building return
@@ -166,12 +184,14 @@ class BallTree:
     def add(self, points, transpose=True):
         # Assign the data type if it is not set.
         if (self.ttype is None):
-            if ('int8' in points.dtype.name): self.ttype = np.int8
-            else:                             self.ttype = np.float64
+            if   ('int8'    in points.dtype.name): self.ttype = np.int8
+            elif ('float32' in points.dtype.name): self.ttype = np.float32
+            elif ('float64' in points.dtype.name): self.ttype = np.float64
+            else:                                  self.ttype = points.dtype
             self._set_type_internals()
         elif (points.dtype != self.ttype):
             class WrongType(Exception): pass
-            raise(WrongType(f"The points provided were type '{points.dtype.name}', expected '{self.ttype.name}'."))
+            raise(WrongType(f"The points provided were type '{points.dtype.name}', expected '{str(self.ttype)}'."))
         # Transpose the points if the are not already column-vectors.
         if transpose: points = points.T
         # If there are existing points, make sure the new ones match.
@@ -183,13 +203,17 @@ class BallTree:
             else:
                 old_tree = self.tree
                 old_points = self.tree[:,:self.size]
-                dim = self.tree.shape[1]
+                dim = self.tree.shape[0]
                 self.size += points.shape[1]
                 self.tree = np.zeros((dim, self.size), dtype=self.ttype)
                 # Assign the relevant internals for this tree.
                 self.sq_sums = np.zeros(self.tree.shape[1],  dtype=self.sstype)
-                self.order   = np.arange(self.tree.shape[1], dtype='int64') + 1
-                self.radii   = np.zeros(self.tree.shape[1],  dtype='float64')
+                if ('64' in str(self.ttype)):
+                    self.order   = np.arange(self.tree.shape[1], dtype='int64') + 1
+                    self.radii   = np.zeros(self.tree.shape[1],  dtype='float64')
+                elif ('32' in str(self.ttype)):
+                    self.order   = np.arange(self.tree.shape[1], dtype='int32') + 1
+                    self.radii   = np.zeros(self.tree.shape[1],  dtype='float32')
                 # Pack the old points and the new points into a single tree.
                 self.tree[:,:old_points.shape[1]] = old_points
                 self.tree[:,old_points.shape[1]:] = points
@@ -202,8 +226,12 @@ class BallTree:
             self.tree    = np.asarray(points, order='F', dtype=self.ttype)
             # Assign the relevant internals for this tree.
             self.sq_sums = np.zeros(self.tree.shape[1],  dtype=self.sstype)
-            self.order   = np.arange(self.tree.shape[1], dtype='int64') + 1
-            self.radii   = np.zeros(self.tree.shape[1],  dtype='float64')
+            if ('64' in str(self.ttype)):
+                self.order   = np.arange(self.tree.shape[1], dtype='int64') + 1
+                self.radii   = np.zeros(self.tree.shape[1],  dtype='float64')
+            elif ('32' in str(self.ttype)):
+                self.order   = np.arange(self.tree.shape[1], dtype='int32') + 1
+                self.radii   = np.zeros(self.tree.shape[1],  dtype='float32')
             # Store BallTree internals for knowing how to evaluate.
             self.built = 0
             self.size = self.tree.shape[1]
@@ -260,8 +288,12 @@ class BallTree:
         k = min(k, self.built)
         # Initialize holders for output.
         points  = np.asarray(z, order='F', dtype=self.ttype)
-        indices = np.ones((k, points.shape[1]), order='F', dtype='int64')
-        dists   = np.ones((k, points.shape[1]), order='F', dtype='float64')
+        if ('64' in str(self.ttype)):
+            indices = np.ones((k, points.shape[1]), order='F', dtype='int64')
+            dists   = np.ones((k, points.shape[1]), order='F', dtype='float64')
+        elif ('32' in str(self.ttype)):
+            indices = np.ones((k, points.shape[1]), order='F', dtype='int32')
+            dists   = np.ones((k, points.shape[1]), order='F', dtype='float32')
         order = self._get_order(search=True)
         # Compute the nearest neighbors.
         if (not approximate) and (look_ahead is None):
@@ -312,7 +344,10 @@ class BallTree:
             if method in {"inner", "outer"}:
                 to_keep = min(size, 1 + 2**(levels-1))
                 # Otherwise, get the root, first outer, and all inners.
-                indices = np.zeros(to_keep, dtype=np.int64)
+                if ('64' in str(self.ttype)):
+                    indices = np.zeros(to_keep, dtype=np.int64)
+                elif ('32' in str(self.ttype)):
+                    indices = np.zeros(to_keep, dtype=np.int32)
                 # Get the indices of the inner children of the built tree.
                 if method == "inner":
                     indices[0] = 1
@@ -325,7 +360,10 @@ class BallTree:
             else:
                 to_keep = min(size, 2**levels - 1)
                 # Simply grab the root of the tree.
-                indices = np.zeros(to_keep, dtype=np.int64)
+                if ('64' in str(self.ttype)):
+                    indices = np.zeros(to_keep, dtype=np.int64)
+                elif ('32' in str(self.ttype)):
+                    indices = np.zeros(to_keep, dtype=np.int32)
                 self._top(size, levels, indices)
             indices[:] -= 1
         # Stop this operation if the tree will remain unchanged.

@@ -24,12 +24,13 @@ if COMPARE_AGAINST_SKLEARN:
     if LARGE_TEST: train, dim = 1000000, 100
     else:          train, dim = 7, 2
     test = 1
-    leaf_size = 10
+    leaf_size = 1
+    leaf_size = 1
     k = 5
     print("Initializing data..", flush=True)
     np.random.seed(0)
-    x = np.random.random(size=(train,dim))
-    z = np.random.random(size=(test,dim))
+    x = np.asarray(np.random.random(size=(train,dim)), dtype='float64')
+    z = np.asarray(np.random.random(size=(test,dim)),  dtype='float64')
     print()
     print("x:", x.shape)
     print("z:", z.shape)
@@ -44,6 +45,8 @@ if COMPARE_AGAINST_SKLEARN:
     print("Construction time:", ct)
     t.start()
     d, i = tree.query(z, k=k)
+    # d, i = tree.query(z, k=k, max_search=10000)
+    # d, i = tree.query(z, k=k, approximate=True)
     qt = t.stop()
     print("Query time:       ", qt)
     print("d: ",d[0])
